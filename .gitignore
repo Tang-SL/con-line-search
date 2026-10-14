@@ -17,3 +17,5 @@ __pycache__/
 **/config/espada.yaml
 **/config/pilot.yaml
 **/qa/spectra.npz
+
+.pytest_cache/

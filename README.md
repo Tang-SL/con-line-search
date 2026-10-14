@@ -97,3 +97,82 @@ and excitation assumptions. Do not lower detection thresholds solely because a
 catalogue predicts a transition.
 
 No redistribution license for the project's original code has been selected yet.
+
+## Local web interface
+
+```sh
+source .venv/bin/activate
+python -m pip install -r requirements-ui.txt
+python -m streamlit run app.py
+```
+
+Open http://127.0.0.1:8501. The server binds to localhost; it is not deployed to
+a public service. Cubes stay local. Live Splatalogue sends frequency ranges and
+catalogue filter choices, not cube data. The saved SPW0 snapshot works offline.
+
+1. Upload one or more FITS cubes, supply local paths (better for large files),
+   or select the prepared IC 860 SPWs. Upload limit is 4 GB per file; RAM limits
+   the actual batch size. Cubes are loaded in memory and up to eight are cached.
+2. Choose a circle (default radius: one beam major-axis FWHM), ellipse,
+   rectangle or single pixel. Choose the image centre, median-image brightness
+   peak or custom zero-based pixel position. A shared sky position is projected
+   onto each SPW's WCS. Angles are relative to each image's x axis; rotated grids
+   need care for noncircular apertures. Spectra are aperture means in the cube's
+   brightness units, not total integrated fluxes.
+3. Inspect the aperture and noise-control positions. The detector needs at
+   least eight non-overlapping translated apertures outside the central source;
+   it uses at most 64. Source emission in these controls affects the noise
+   estimate. Large apertures or small fields can fail this check explicitly.
+4. Run the catalogue-guided search across the batch. Use **Live Splatalogue**
+   for other SPWs; the saved snapshot is restricted to its actual frequency
+   coverage. The default is Extragalactic, Eu <=300 K, +/-200 km/s, and an
+   integrated S/N screen of 8. Hot Cores and other settings are adjustable.
+5. Review significant and provisional candidates, inspect competing transitions,
+   edit integration channels, and select which features to adopt. Adoption is
+   manual; none is selected automatically. Choose the adopted transition for
+   each feature before map generation.
+6. Export a ZIP with celestial-WCS FITS moment-0 maps, interactive HTML previews,
+   the candidate table and a JSON manifest containing source/aperture settings,
+   selected catalogue priors, adopted transitions, intervals and baseline choices.
+   Maps retain negative absorption and use positive channel widths in km/s.
+
+### Interface detector and supported data
+
+The interface uses a **new 1D aperture detector**, not the archived 3D ESPADA
+backend. It searches 3/5/9-channel boxcars by default only around catalogue
+positions. Two baseline estimates (constant, five sideband channels per side;
+linear, ten per side) start after a two-channel gap. The same operation is
+applied to the control spectra, retaining their spectral correlations. The
+reported S/N is the smaller absolute value from the two models, requiring a
+consistent sign. Significant candidates additionally require full sidebands,
+two adjacent >=3-sigma channels, <=30% baseline variation, and no channel with
+noise >3 times the median. Candidates >=3 S/N are available for manual review.
+
+The search scans positions and widths and merges overlapping same-sign windows;
+these S/N values are **not calibrated false-alarm probabilities**. No FDR,
+injection-completeness or LTE abundance inference is claimed. Sidebands can be
+contaminated by blends; inspect them and the map-baseline setting. Map generation
+refits the chosen baseline per spatial pixel outside the edited line interval.
+Manual interval changes do not silently recompute the original detection S/N.
+Changing source/aperture/search inputs invalidates earlier detections and adoption.
+
+Supported FITS ordering: RA, DEC, FREQ/VRAD/VOPT, optionally singleton Stokes.
+Multiple polarization planes and other axis orders fail explicitly. Velocity
+axes require RESTFRQ. Units: Jy/beam, mJy/beam (converted to Jy/beam), K, Jy/pixel.
+Per-channel BEAMS tables are homogenized to a circular beam for each cube
+(square pixels and finite data required); cubes are **not matched to a shared
+beam across SPWs**. No frame conversion, primary-beam correction, spectral
+stacking or cross-SPW flux combination is performed. Unknown/different reference
+frames are shown explicitly. FITS maps preserve celestial WCS and beam metadata.
+
+### Verification
+
+```sh
+python -m pytest -q
+```
+
+Synthetic tests exercise injected absorption, frequency/velocity conversion,
+positive integration widths on reversed axes, linear-continuum subtraction,
+invalid apertures, and FITS export. Streamlit tests exercise the empty app and,
+when local IC 860 data are linked, detection, manual adoption, map generation,
+and stale-result invalidation. The original ESPADA pilot remains unchanged.

@@ -1,0 +1,4 @@
+-r requirements.txt
+streamlit>=1.45,<2
+plotly>=6,<7
+pytest>=8,<10
