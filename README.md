@@ -1,12 +1,10 @@
 # con-line-search
 
-Catalogue-guided spectral-line searches in ALMA cubes, starting with IC 860
-Band 5 SPW0. This research prototype uses Splatalogue transition positions to
-prepare targeted windows for ESPADA/SoFiA, then checks feature robustness and
-retains competing molecular identifications.
-
-**Current scope:** IC 860-specific scripts and a worked example. This is not yet
-a general source-analysis package or an excitation/radiative-transfer model.
+An ALMA spectral-line workbench with an IC 860 Band 5 example. The interactive
+workflow detects emission/absorption features with ESPADA/SoFiA, then queries
+live Splatalogue for possible identifications and exports adopted feature maps.
+Historical catalogue-guided scripts and results are retained for reproducibility.
+This research prototype is not an excitation/radiative-transfer model.
 
 ![IC 860 catalogue positions and nuclear spectrum](targets/ic860/alma/catalogue_spw0/qa/catalogue_overview.png)
 
@@ -103,118 +101,86 @@ No redistribution license for the project's original code has been selected yet.
 ```sh
 source .venv/bin/activate
 python -m pip install -r requirements-ui.txt
+# Put the compiled SoFiA executable on PATH, or set SOFIA_EXECUTABLE.
 python -m streamlit run app.py
 ```
 
-Open http://127.0.0.1:8501. The server binds to localhost; it is not deployed to
-a public service. Cubes stay local. Live Splatalogue sends frequency ranges and
-catalogue filter choices, not cube data. The saved SPW0 snapshot works offline.
+Open http://127.0.0.1:8501. Cubes stay local. The interface now uses the real
+ESPADA/SoFiA 3D finder first, followed by **live Splatalogue only** for identification.
+Archived catalogue snapshots remain solely for reproducing the historical pilot.
 
-1. Upload one or more FITS cubes, supply local paths (better for large files),
-   or select the prepared IC 860 SPWs. Upload limit is 4 GB per file; RAM limits
-   the actual batch size. Cubes are loaded in memory and up to eight are cached.
-2. Choose a circle (default radius: one beam major-axis FWHM), ellipse,
-   rectangle or single pixel. Choose the image centre, median-image brightness
-   peak or custom zero-based pixel position. A shared sky position is projected
-   onto each SPW's WCS. Angles are relative to each image's x axis; rotated grids
-   need care for noncircular apertures. Spectra are aperture means in the cube's
-   brightness units, not total integrated fluxes.
-3. Inspect the aperture and noise-control positions. The detector needs at
-   least eight non-overlapping translated apertures outside the central source;
-   it uses at most 64. Source emission in these controls affects the noise
-   estimate. Large apertures or small fields can fail this check explicitly.
-4. Run the catalogue-guided search across the batch. Use **Live Splatalogue**
-   for other SPWs; the saved snapshot is restricted to its actual frequency
-   coverage. The default is Extragalactic, Eu <=300 K, +/-200 km/s, and an
-   integrated S/N screen of 8. Hot Cores and other settings are adjustable.
-5. Review significant and provisional candidates, inspect competing transitions,
-   edit integration channels, and select which features to adopt. Adoption is
-   manual; none is selected automatically. Choose the adopted transition for
-   each feature before map generation.
-6. Export a ZIP with celestial-WCS FITS moment-0 maps, interactive HTML previews,
-   the candidate table and a JSON manifest containing source/aperture settings,
-   selected catalogue priors, adopted transitions, intervals and baseline choices.
-   Maps retain negative absorption and use positive channel widths in km/s.
+1. Upload multiple FITS cubes, supply local paths, or select the IC 860 examples.
+2. Choose a circle, ellipse, rectangle or single pixel and inspect the extracted
+   aperture-mean spectra and spatial noise controls. Default radius is one beam
+   major-axis FWHM. Shared sky positions are projected onto each SPW separately.
+3. Run ESPADA on each cube, independently of redshift and molecular catalogues.
+   Both emission and absorption are enabled by default. Components whose masks
+   intersect the aperture are listed with short feature IDs. All are labelled
+   on the spectrum; green features pass the additional aperture significance screen.
+4. Fetch live Splatalogue matches for significant features (optionally provisional
+   ones too). Every explicit matching request fetches fresh data. Network failure
+   leaves detections available without substituting a saved catalogue. Changing
+   catalogue filters or redshift does not invalidate detection or its significance.
+5. Review possible identifications separately, sorted by absolute velocity offset
+   within the adjustable default ±200 km/s tolerance. These are alternatives, not
+   probability rankings or confirmed molecular identifications. Detection centroids
+   come from the full ESPADA 3D component, not a new fit to the aperture spectrum.
+6. Adopt features, optionally assign transitions, edit integration intervals and
+   generate signed integrated maps. The default assignment is **Unidentified**.
+   Unidentified maps use the observed centroid as the velocity-width reference;
+   their FITS header has VREFGHZ instead of an assumed rest frequency/redshift.
+   Previews default to 3× zoom; exported FITS maps retain the full field.
 
-### Interface detector and supported data
+The ZIP export includes maps, interactive previews, feature table and provenance:
+ESPADA parameter files/logs, aperture settings, live query time/results/filter audit,
+and adopted transitions. Edited map intervals do not recompute detection significance.
 
-The interface uses a **new 1D aperture detector**, not the archived 3D ESPADA
-backend. It searches 3/5/9-channel boxcars by default only around catalogue
-positions. Two baseline estimates (constant, five sideband channels per side;
-linear, ten per side) start after a two-channel gap. The same operation is
-applied to the control spectra, retaining their spectral correlations. The
-reported S/N is the smaller absolute value from the two models, requiring a
-consistent sign. Significant candidates additionally require full sidebands,
-two adjacent >=3-sigma channels, <=30% baseline variation, and no channel with
-noise >3 times the median. Candidates >=3 S/N are available for manual review.
+### Detection and significance
 
-The search scans positions and widths and merges overlapping same-sign windows;
-these S/N values are **not calibrated false-alarm probabilities**. No FDR,
-injection-completeness or LTE abundance inference is claimed. Sidebands can be
-contaminated by blends; inspect them and the map-baseline setting. Map generation
-refits the chosen baseline per spatial pixel outside the edited line interval.
-Manual interval changes do not silently recompute the original detection S/N.
-Changing source/aperture/search inputs invalidates earlier detections and adoption.
+ESPADA runs SoFiA in separate emission and absorption modes. Defaults: 5σ voxel
+threshold; unsmoothed and 3/5/9-channel spectral kernels; unsmoothed and one-beam
+spatial kernels. Source linking retains the pilot's minimum sizes (5 pixels per
+spatial axis, 2 channels, 50 voxels). Thus spatially tiny sources can be missed.
+The continuum-subtracted checkbox defaults on; turn it off for SoFiA's linear
+continuum subtraction. Cached runs can be reused when only the aperture changes.
 
-Supported FITS ordering: RA, DEC, FREQ/VRAD/VOPT, optionally singleton Stokes.
-Multiple polarization planes and other axis orders fail explicitly. Velocity
-axes require RESTFRQ. Units: Jy/beam, mJy/beam (converted to Jy/beam), K, Jy/pixel.
-Per-channel BEAMS tables are homogenized to a circular beam for each cube
-(square pixels and finite data required); cubes are **not matched to a shared
-beam across SPWs**. No frame conversion, primary-beam correction, spectral
-stacking or cross-SPW flux combination is performed. Unknown/different reference
-frames are shown explicitly. FITS maps preserve celestial WCS and beam metadata.
+Each overlapping component is independently assessed in the chosen aperture.
+Two local baseline estimates (constant with five sideband channels per side,
+linear with ten, after a two-channel gap) are applied to both source and control
+spectra. Reported S/N is the smaller absolute result and must agree with the
+ESPADA sign. Significant features require S/N≥8, complete sidebands, two adjacent
+channels at ≥3σ, ≤30% baseline variation, and no spectral-edge/high-noise flag.
+All other ESPADA components remain available as provisional features. Large
+apertures can dilute compact lines below the significance threshold.
 
-### Verification
+These thresholds are **not search-wide false-alarm probabilities**. No FDR,
+completeness calibration, LTE modelling or abundance inference is claimed.
+Blends can contaminate sidebands and alter centroids. Identification requires
+checking other transitions and physically consistent excitation.
+
+### Catalogue filtering
+
+Default Extragalactic selection, Eu≤300 K, deuterated/trans species excluded,
+multiple explicit rare-isotope substitutions excluded, log10(A/s⁻¹)≥−5 required.
+Hot Cores and all screening choices are adjustable. Single rare-isotope
+substitutions and excited vibrational/torsional lines are retained by default.
+These label-based screens are incomplete and can exclude real weak transitions;
+Einstein A is not a flux prediction. Download the filter audit to inspect exclusions.
+Catalogue settings affect identification only.
+
+### Supported data and verification
+
+FITS axis order: RA, DEC, FREQ/VRAD/VOPT, optionally singleton Stokes. Velocity
+axes require RESTFRQ. Brightness units: Jy/beam, mJy/beam, K, Jy/pixel. Variable
+BEAMS are homogenized per cube, not across SPWs. This ESPADA integration requires
+finite pixels; crop blank borders first. At least eight translated noise-control
+apertures must fit in the field. No frame conversion, primary-beam correction,
+spectral stacking or cross-SPW flux combination is performed.
 
 ```sh
 python -m pytest -q
 ```
 
-Synthetic tests exercise injected absorption, frequency/velocity conversion,
-positive integration widths on reversed axes, linear-continuum subtraction,
-invalid apertures, and FITS export. Streamlit tests exercise the empty app and,
-when local IC 860 data are linked, detection, manual adoption, map generation,
-and stale-result invalidation. The original ESPADA pilot remains unchanged.
-
-### Catalogue screening and candidate displays
-
-The interactive defaults now exclude deuterated species and trans conformers,
-explicit multiple rare-isotope substitutions, and transitions with
-`log10(A_ul / s^-1) < -5` or missing A values. The Eu<=300 K default remains.
-Single substitutions (including 13C, 15N, 18O, 34S and 30Si) are retained.
-Vibrational/torsional excitation is **not excluded by default**, since these
-transitions can be important in CONs. An optional excited-state filter uses
-explicit species/QN labels; combined entries such as vt=0-2 are retained unless
-the transition specifies an excited state. It is a label-based screen, not a
-complete quantum-number parser. The isotope rule recognizes explicit 13C, 15N,
-17O, 18O, 29Si, 30Si, 33S, 34S, 36S and 37Cl labels; other isotope encodings are
-not inferred. Exact duplicate species/frequency/QN rows are removed.
-
-The A threshold is an adjustable prioritization rule, **not a predicted line
-flux or evidence of non-detection**. It can remove real weak transitions, including
-the weak methanol association discussed in the original SPW0 pilot. Every search
-provides downloadable excluded transitions and reasons, and map manifests retain
-that audit and all filter settings. Counts per reason overlap. The archived
-pilot's catalogue selection and results remain unchanged.
-
-For the saved IC 860 SPW0 Hot Cores query, these defaults reduce the previous
-930 priors to 428. There is no longer a 500-prior failure: overlapping trial
-windows reuse measurements, and larger selections are allowed. Retained catalogue
-entries are hypotheses, not independent statistical trials.
-
-The catalogue databases distinguish Einstein A, line strength and integrated
-intensity at a reference temperature. This app uses the returned Einstein A
-field rather than mixing these quantities; see the
-[CDMS catalogue format](https://cdms.astro.uni-koeln.de/classic/predictions/description.html)
-and [CDMS search documentation](https://cdms.astro.uni-koeln.de/cgi-bin/cdmssearch).
-
-The detection spectrum labels all candidate features in the displayed SPW at
-their measured positions. Significant features have bold green labels, solid
-lines and diamond markers; provisional features use amber dotted lines and open
-circles. Hover reveals full alternative names and S/N. Significant table rows
-are also highlighted. Use the candidate selector to switch SPWs for inspection.
-
-Integrated-map previews default to 3x zoom around the extraction aperture, with
-an adjustable 1–8x control. This changes the displayed field only; downloaded
-FITS maps retain the complete image and WCS. The HTML preview retains the zoom.
+Local-data UI integration tests require ESPADA and SoFiA. Tests cover catalogue-free
+detection, independent identification settings, failed live queries, unidentified
+map export, stale aperture invalidation, labels, spectral conversion and baselines.

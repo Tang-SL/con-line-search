@@ -19,7 +19,8 @@ def test_all_candidates_labelled_and_significance_distinguished():
     rows=[dict(id=f'spw-{i:03}',lo=i+2,hi=i+4,frequency_GHz=cube.frequency[i+3],snr=10 if i else 4,significant=bool(i),matches=[{'species':name}]) for i,name in enumerate(['H2S','CH3OH'])]
     fig=spectrum_plot(cube,ex,rows)
     assert len(fig.layout.annotations)==2
-    assert 'H2S' in fig.layout.annotations[0].text and 'CH3OH' in fig.layout.annotations[1].text
+    assert 'spw-000' in fig.layout.annotations[0].text and 'spw-001' in fig.layout.annotations[1].text
+    assert 'H2S' not in fig.layout.annotations[0].text
     assert fig.layout.annotations[0].font.color!=fig.layout.annotations[1].font.color
     markers=[q for q in fig.data if q.mode=='markers']
     assert {q.marker.symbol for q in markers}=={'diamond','circle-open'}

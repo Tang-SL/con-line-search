@@ -23,12 +23,11 @@ def spectrum_plot(cube,extraction,features=(),selected_id=None):
         lo,hi=sorted([cube.frequency[q['lo']],cube.frequency[q['hi']]])
         fig.add_vrect(x0=lo,x1=hi,fillcolor=color,opacity=.22 if significant else .07,line_width=0)
         fig.add_vline(x=q['frequency_GHz'],line_color=color,line_width=3 if selected or significant else 1,line_dash='solid' if significant else 'dot')
-        labels=list(dict.fromkeys(p['species'] for p in q['matches']))
-        species=' / '.join(labels);short=species if len(species)<=36 else species[:33]+'…'
-        label=q.get('id','candidate').split('-')[-1]+' '+short
+        label=q.get('id','feature')+' '+q.get('sign','')
+        snr='unavailable' if q['snr'] is None else f"{q['snr']:.2f}"
         status='Significant' if significant else 'Provisional'
         idx=int(np.argmin(abs(cube.frequency-q['frequency_GHz'])))
-        fig.add_trace(go.Scatter(x=[q['frequency_GHz']],y=[extraction['spectrum'][idx]],mode='markers',marker=dict(size=11 if significant else 8,color=color,symbol='diamond' if significant else 'circle-open'),name=status,legendgroup=status,showlegend=status not in shown,hovertemplate=html.escape(species)+f'<br>{status} · S/N {q["snr"]:.2f}<br>%{{x:.6f}} GHz<extra></extra>'))
+        fig.add_trace(go.Scatter(x=[q['frequency_GHz']],y=[extraction['spectrum'][idx]],mode='markers',marker=dict(size=11 if significant else 8,color=color,symbol='diamond' if significant else 'circle-open'),name=status,legendgroup=status,showlegend=status not in shown,hovertemplate=html.escape(label)+f'<br>{status} · S/N {snr}<br>%{{x:.6f}} GHz<extra></extra>'))
         shown.add(status)
         fig.add_annotation(x=q['frequency_GHz'],y=1.02+(i%3)*.12,xref='x',yref='paper',text=('<b>'+html.escape(label)+'</b>') if significant else html.escape(label),showarrow=False,font=dict(color=color,size=10),textangle=-20,xanchor='center')
     fig.update_layout(height=440 if features else 350,xaxis_title=f'Observed frequency (GHz; {cube.frame})',yaxis_title=f'Aperture mean ({cube.unit})',margin=dict(l=10,r=10,t=120 if features else 45,b=50),legend=dict(orientation='h',y=-.25,x=0,font=dict(size=10)))
