@@ -4,7 +4,7 @@ import hashlib, io, json, zipfile
 import numpy as np
 import pandas as pd
 import streamlit as st
-import plotly.graph_objects as go
+from conlines.plots import chart_image, spectrum_plot
 from astropy.wcs import WCS
 from conlines.core import read_cube,extract,query_catalogue,select_priors,detect,moment,fits_bytes,C
 
@@ -29,19 +29,6 @@ def measure(key,config,_cube):return extract(_cube,**config)
 @st.cache_data(max_entries=8,show_spinner=False)
 def preview_image(key,_cube):return np.nanmedian(_cube.data,axis=0)
 
-def chart_image(image,title,mask=None,controls=None):
-    fig=go.Figure(go.Heatmap(z=image,colorscale='Viridis',colorbar=dict(title='brightness')))
-    if mask is not None:fig.add_trace(go.Contour(z=mask.astype(int),contours=dict(start=.5,end=.5,size=1,coloring='none'),line=dict(color='#ffb649',width=2),showscale=False,showlegend=False,hoverinfo='skip'))
-    if controls:fig.add_trace(go.Scatter(x=[c[0] for c in controls],y=[c[1] for c in controls],mode='markers',marker=dict(size=4,color='white'),name='Noise controls'))
-    fig.update_layout(title=title,height=430,margin=dict(l=10,r=10,t=45,b=10),xaxis_title='x pixel (zero-based)',yaxis_title='y pixel (zero-based)',showlegend=False,yaxis=dict(scaleanchor='x',constrain='domain',range=[-.5,image.shape[0]-.5]),xaxis=dict(constrain='domain',range=[-.5,image.shape[1]-.5]))
-    return fig
-
-def spectrum_plot(cube,extraction,features=()):
-    fig=go.Figure(go.Scatter(x=cube.frequency,y=extraction['spectrum'],mode='lines',line=dict(color='#167f83',shape='hv'),name='Aperture mean'))
-    for y,name in [(3*extraction['noise'],'+3σ controls'),(-3*extraction['noise'],'−3σ controls')]:fig.add_trace(go.Scatter(x=cube.frequency,y=y,line=dict(color='#b5bec8',dash='dot'),name=name))
-    for q in features:fig.add_vrect(x0=min(cube.frequency[q['lo']],cube.frequency[q['hi']]),x1=max(cube.frequency[q['lo']],cube.frequency[q['hi']]),fillcolor='#dfac47',opacity=.2,line_width=0)
-    fig.update_layout(height=350,xaxis_title=f'Observed frequency (GHz; {cube.frame})',yaxis_title=f'Aperture mean ({cube.unit})',margin=dict(l=10,r=10,t=45,b=50),legend=dict(orientation='h',y=1.15,x=0,font=dict(size=10)))
-    return fig
 
 with st.sidebar:
     st.subheader('Source & catalogue')
@@ -52,6 +39,11 @@ with st.sidebar:
     selected_filters=tuple('extragalactic' if v=='Extragalactic' else 'ism-hot-core' for v in filters)
     energy=st.number_input('Maximum upper-state energy (K)',1.,10000.,300.,step=50.)
     exclude=st.checkbox('Exclude deuterated / trans species',True)
+    exclude_multiple=st.checkbox('Exclude multiple rare-isotope substitutions',True,help='Retains single substitutions such as 13C, 15N, 18O, 34S and 30Si. Applies to explicit isotope labels, not ordinary atom counts.')
+    strength_filter=st.checkbox('Filter very weak transitions',True)
+    min_log_a=st.number_input('Minimum log₁₀ Einstein A (s⁻¹)',-15.,0.,-5.,step=.5,disabled=not strength_filter) if strength_filter else None
+    exclude_excited=st.checkbox('Exclude explicitly excited vibrational/torsional states',False,help='Off by default: excited lines can be important in hot cores and CONs. Mixed-state catalogue entries are retained unless the transition identifies an excited state.')
+    st.caption('Default A ≥10⁻⁵ s⁻¹ is a screening choice, not a flux prediction. Weak transitions and multiple isotopic substitutions can still be real. Disable these filters for completeness checks.')
     catalogue_source=st.selectbox('Catalogue source',['Saved IC 860 SPW0 snapshot','Live Splatalogue'])
     st.divider();st.subheader('Detection settings')
     halfwidth=st.number_input('Search ± velocity (km/s)',20.,2000.,200.,step=20.)
@@ -134,9 +126,9 @@ for k,v in loaded.items():
 
 st.subheader('3 · Detect and review candidates')
 st.caption('Catalogue-guided 1D aperture detector. This is a new backend, separate from ESPADA’s 3D source finder. Blank baselines and crowded lines still require inspection; a frequency match is not a molecular identification.')
-signature=hashlib.sha256(json.dumps(dict(engine='aperture-v1.1',files=list(loaded),apertures=configs,z=z,filters=selected_filters,energy=energy,exclude=exclude,source=catalogue_source,halfwidth=halfwidth,threshold=threshold,widths=widths,mode=mode),sort_keys=True).encode()).hexdigest()
+signature=hashlib.sha256(json.dumps(dict(engine='aperture-v1.2',files=list(loaded),apertures=configs,z=z,filters=selected_filters,energy=energy,exclude=exclude,min_log_a=min_log_a,exclude_multiple=exclude_multiple,exclude_excited=exclude_excited,source=catalogue_source,halfwidth=halfwidth,threshold=threshold,widths=widths,mode=mode),sort_keys=True).encode()).hexdigest()
 if st.button('Run detection across all loaded SPWs',type='primary',disabled=not extractions or not selected_filters or not widths):
-    results={};status=[];prior_cache={}
+    results={};status=[];prior_cache={};filter_audits={}
     progress=st.progress(0.)
     for i,(k,ex) in enumerate(extractions.items()):
         cube=loaded[k]['cube'];low=cube.frequency.min()*(1+z)*(1-halfwidth/C);high=cube.frequency.max()*(1+z)*(1+halfwidth/C)
@@ -147,20 +139,26 @@ if st.button('Run detection across all loaded SPWs',type='primary',disabled=not 
                     if low<limits[0]-1e-7 or high>limits[1]+1e-7:raise ValueError('Saved catalogue does not cover this SPW/redshift. Select Live Splatalogue.')
                     rows=json.loads((ROOT/'targets/ic860/alma/catalogue_spw0/catalogue/normalized.json').read_text())
                 else:rows=catalogue(float(low),float(high),selected_filters)
-                priors=select_priors(rows,cube.frequency.min(),cube.frequency.max(),z,halfwidth,energy,selected_filters,exclude)
-                if len(priors)>500:raise ValueError(f'{len(priors)} priors selected. Reduce energy/filter scope to at most 500 for this interactive search.')
+                priors,audit=select_priors(rows,cube.frequency.min(),cube.frequency.max(),z,halfwidth,energy,selected_filters,exclude,min_log_a,exclude_multiple,exclude_excited,return_audit=True)
+                filter_audits[k]=audit
                 prior_cache[k]=priors
                 found=detect(cube,ex,priors,halfwidth,threshold,tuple(widths),mode)
                 for n,q in enumerate(found):q['id']=k[:12]+f'-{n+1:03}'
-                results[k]=found;status.append(dict(SPW=loaded[k]['name'],Priors=len(priors),Candidates=len(found),Significant=sum(q['significant'] for q in found),Status='Completed'))
+                results[k]=found;status.append(dict(SPW=loaded[k]['name'],Priors=len(priors),Filtered_out=audit['rejected'],Candidates=len(found),Significant=sum(q['significant'] for q in found),Status='Completed'))
         except Exception as e:status.append(dict(SPW=loaded[k]['name'],Status=str(e)))
         progress.progress((i+1)/len(extractions))
-    st.session_state['analysis']=dict(signature=signature,results=results,status=status,priors=prior_cache)
+    st.session_state['analysis']=dict(signature=signature,results=results,status=status,priors=prior_cache,filter_audits=filter_audits)
 analysis=st.session_state.get('analysis')
 if not analysis or analysis['signature']!=signature:
     if analysis:st.info('Inputs or settings changed. Rerun detection before adopting lines or making maps.')
     st.stop()
 st.dataframe(pd.DataFrame(analysis['status']),hide_index=True,width='stretch')
+with st.expander('Catalogue filter audit — inspect what was excluded'):
+    for k,audit in analysis.get('filter_audits',{}).items():
+        st.write(loaded[k]['name']+f": {audit['selected']} retained, {audit['rejected']} excluded")
+        st.json(audit['reason_counts'])
+    st.caption('A transition may have several exclusion reasons. Counts by reason therefore need not sum to the number excluded.')
+    st.download_button('Download excluded transitions and reasons',json.dumps(analysis.get('filter_audits',{}),indent=2),'catalogue_filter_audit.json','application/json')
 rows=[];lookup={}
 for k,features in analysis['results'].items():
     for q in features:
@@ -169,9 +167,10 @@ for k,features in analysis['results'].items():
         rows.append(dict(ID=q['id'],SPW=loaded[k]['name'],Matches=' / '.join(labels),Sign=q['sign'],SNR=round(q['snr'],2),Significant=q['significant'],Observed_GHz=q['frequency_GHz'],Start=q['lo'],End=q['hi'],Flags=', '.join(q['flags'])))
 if not rows:st.info('No candidates reached the provisional S/N ≥3 reporting threshold. This is not an abundance constraint.');st.stop()
 st.write('Select features to adopt below the table. Edit integration channels if needed; channel indices are zero-based and inclusive. Provisional candidates remain available for deliberate review.')
-edited=st.data_editor(pd.DataFrame(rows),hide_index=True,width='stretch',key='review_'+signature,disabled=['ID','SPW','Matches','Sign','SNR','Significant','Observed_GHz','Flags'],column_config={'Start':st.column_config.NumberColumn(min_value=0,step=1),'End':st.column_config.NumberColumn(min_value=0,step=1)})
+edited=st.data_editor(pd.DataFrame(rows).style.apply(lambda row: ['background-color: #d9f0e7; color: #075e46' if row['Significant'] else '' for _ in row],axis=1),hide_index=True,width='stretch',key='review_'+signature,disabled=['ID','SPW','Matches','Sign','SNR','Significant','Observed_GHz','Flags'],column_config={'Start':st.column_config.NumberColumn(min_value=0,step=1),'End':st.column_config.NumberColumn(min_value=0,step=1)})
+st.caption('All detected candidates in the displayed SPW are labelled at their measured positions. Green solid lines/diamonds mark significant features; amber dotted lines/open circles mark provisional ones. Labels are candidate associations.')
 inspect=st.selectbox('Inspect candidate',list(lookup),format_func=lambda ident:f"{ident} · {lookup[ident][1]['species']} · S/N {lookup[ident][1]['snr']:.1f}")
-k,q=lookup[inspect];st.plotly_chart(spectrum_plot(loaded[k]['cube'],extractions[k],[q]),width='stretch',key='inspect_'+inspect)
+k,q=lookup[inspect];st.plotly_chart(spectrum_plot(loaded[k]['cube'],extractions[k],analysis['results'][k],selected_id=inspect),width='stretch',key='inspect_'+inspect)
 st.dataframe(pd.DataFrame([{pkey:p.get(pkey) for pkey in ['species','rest_GHz','qns','Eu_K','log10_A_s']} for p in q['matches']]),hide_index=True,width='stretch')
 st.caption('Listed alternatives are from the selected catalogue filters and energy range. Absence from this table does not exclude other species or blends.')
 
@@ -179,6 +178,7 @@ st.subheader('4 · Make integrated maps')
 adopted_ids=st.multiselect('Adopt features for mapping',list(lookup),format_func=lambda ident:f"{ident} · {lookup[ident][1]['species']} · S/N {lookup[ident][1]['snr']:.1f}",key='adopt_'+signature)
 adopted=edited[edited.ID.isin(adopted_ids)]
 if adopted.empty:st.info('Adopt at least one candidate above to enable map export.');st.stop()
+map_zoom=st.slider('Map preview zoom',1.,8.,3.,step=.5,help='Centred on the extraction aperture. A value of 3 shows one third of the field width. Exported FITS maps retain the full field.')
 baseline=st.selectbox('Map baseline subtraction',['linear','constant','none'],help='Fits local sidebands per spatial pixel, outside the adopted integration channels. Inspect sidebands for blends. None is appropriate only if residual continuum is negligible.')
 choices={}
 for _,r in adopted.iterrows():
@@ -186,7 +186,7 @@ for _,r in adopted.iterrows():
     choice=st.selectbox(f'Adopted transition for {r.ID}',range(len(members)),format_func=lambda j,mm=members:f"{mm[j]['species']} · {mm[j]['rest_GHz']:.7f} GHz · {mm[j].get('qns','')}",key='line_'+r.ID+'_'+signature)
     choices[r.ID]=members[choice]
 if st.button('Generate maps & download bundle',type='primary'):
-    output=io.BytesIO();manifest=dict(redshift=z,settings=dict(halfwidth=halfwidth,threshold=threshold,widths=widths,filters=selected_filters,energy=energy,catalogue_source=catalogue_source),apertures=configs,catalogue_priors=analysis['priors'],lines=[])
+    output=io.BytesIO();manifest=dict(redshift=z,settings=dict(halfwidth=halfwidth,threshold=threshold,widths=widths,filters=selected_filters,energy=energy,catalogue_source=catalogue_source,min_log_a=min_log_a,exclude_deuterated_trans=exclude,exclude_multiple_isotopes=exclude_multiple,exclude_excited=exclude_excited),apertures=configs,catalogue_priors=analysis['priors'],filter_audits=analysis.get('filter_audits',{}),map_preview_zoom=map_zoom,lines=[])
     with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
         for _,r in adopted.iterrows():
             k,q=lookup[r.ID];cube=loaded[k]['cube'];line=choices[r.ID]
@@ -194,7 +194,7 @@ if st.button('Generate maps & download bundle',type='primary'):
                 lo,hi=int(r.Start),int(r.End);im,h=moment(cube,lo,hi,line['rest_GHz'],z,baseline);h['LINEID']=line['species'].encode('ascii','backslashreplace').decode();h['SRCFILE']=loaded[k]['name'].encode('ascii','backslashreplace').decode();h.add_history('Aperture: '+json.dumps(configs[k]))
                 archive.writestr(r.ID+'.fits',fits_bytes(im,h))
                 meta=dict(id=r.ID,source=loaded[k]['name'],transition=line,lo=lo,hi=hi,baseline=baseline,detector_candidate=q,frame=cube.frame,unit=h['BUNIT']);manifest['lines'].append(meta)
-                fig=chart_image(im,f"{loaded[k]['name']} · {line['species']} · channels {lo}–{hi}")
+                fig=chart_image(im,f"{loaded[k]['name']} · {line['species']} · channels {lo}–{hi}",center=(configs[k]['x'],configs[k]['y']),zoom=map_zoom)
                 fig.data[0].colorscale='RdBu_r';fig.data[0].zmid=0;fig.data[0].colorbar.title=h['BUNIT'];st.plotly_chart(fig,width='stretch',key='map_'+r.ID)
                 archive.writestr(r.ID+'.html',fig.to_html(include_plotlyjs=True))
             except (ValueError,TypeError) as e:st.error(f'{r.ID}: {e}')

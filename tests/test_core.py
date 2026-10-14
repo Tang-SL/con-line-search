@@ -64,3 +64,28 @@ def test_both_signs_in_same_catalogue_window():
     prior=[dict(species='test',rest_GHz=c.frequency[36],observed_GHz=c.frequency[36])]
     found=detect(c,ex,prior,halfwidth=220,threshold=8)
     assert {q['sign'] for q in found}=={'Emission','Absorption'}
+
+def test_catalogue_defaults_and_optional_exclusions():
+    from conlines.core import select_priors,catalogue_exclusions
+    def row(name,a=-4.,qns=''):
+        return dict(species=name,rest_GHz=170.,qns=qns,Eu_K=100.,log10_A_s=a,filters=['ism-hot-core'])
+    rows=[row('H2S'),row('CH3OH',-8.),row('HDCO'),row('trans-HCOOH'),row('t-HCOOH'),row('13CH313CH2CN'),row('H13CN'),row('34SO'),row('30SiO'),row('HCN v2=1'),row('CH3OH vt=0-2',qns='vt=0')]
+    kept,audit=select_priors(rows,169,171,0,200,300,['ism-hot-core'],return_audit=True)
+    assert {r['species'] for r in kept}=={'H2S','H13CN','34SO','30SiO','HCN v2=1','CH3OH vt=0-2'}
+    assert audit['selected']==6 and audit['rejected']==5
+    assert catalogue_exclusions(row('HCN v2=1'),exclude_excited=True)
+    assert not catalogue_exclusions(row('CH3OH vt=0-2',qns='vt=0'),exclude_excited=True)
+    assert catalogue_exclusions(row('CH3OH vt=0-2',qns='vt=2'),exclude_excited=True)
+    assert not catalogue_exclusions(row('CH3OH',-8.),min_log_a=None)
+
+
+def test_default_filter_reduces_saved_hot_core_inventory():
+    import json
+    from pathlib import Path
+    from conlines.core import select_priors
+    rows=json.loads((Path(__file__).resolve().parents[1]/'targets/ic860/alma/catalogue_spw0/catalogue/normalized.json').read_text())
+    args=(rows,166.02382853733533,167.86858653733393,3880/C,200,300,['ism-hot-core'])
+    old=select_priors(*args,min_log_a=None,exclude_multiple_isotopes=False)
+    new=select_priors(*args)
+    assert len(old)>500 and len(new)<500
+    assert any(r['species']=='H2S' for r in new)

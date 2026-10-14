@@ -143,16 +143,52 @@ def query_catalogue(low, high, filters):
     return list(rows.values())
 
 
-def select_priors(rows, low, high, z, halfwidth, energy, filters, exclude=True):
-    out=[]
+def catalogue_exclusions(row, exclude=True, min_log_a=-5., exclude_multiple_isotopes=True,
+                         exclude_excited=False):
+    """Transparent screening rules, not abundance or excitation predictions.
+
+    Isotope prefixes are matched before element symbols, not arbitrary digits
+    (so ordinary H2/H3 stoichiometry is never treated as isotopic substitution).
+    Mixed-state entries such as vt=0-2 remain unless their transition QNs
+    explicitly identify an excited state.
+    """
+    name=row['species'];reasons=[]
+    if exclude and re.search(r'D(?![a-z])',name):reasons.append('deuterated')
+    if exclude and re.search(r'\btrans\b|(?:^|[-\s])t-',name,re.I):reasons.append('trans conformer')
+    isotope_tokens=re.findall(r'(?:13C|15N|17O|18O|29Si|30Si|33S|34S|36S|37Cl)',name)
+    if exclude_multiple_isotopes and len(isotope_tokens)>1:reasons.append('multiple rare-isotope substitutions')
+    a=row.get('log10_A_s')
+    if min_log_a is not None:
+        if a is None or not np.isfinite(a):reasons.append('missing Einstein A')
+        elif a<min_log_a:reasons.append('below Einstein A threshold')
+    if exclude_excited:
+        text=name+' '+row.get('qns','')
+        # Do not discard combined ground/excited catalogue entries (v=0-2).
+        if re.search(r'v(?:[_ ]?[t0-9]+)?\s*=\s*[1-9]',text,re.I):
+            reasons.append('explicitly excited vibrational/torsional state')
+    return reasons
+
+
+def select_priors(rows, low, high, z, halfwidth, energy, filters, exclude=True,
+                  min_log_a=-5., exclude_multiple_isotopes=True, exclude_excited=False,
+                  return_audit=False):
+    out=[];rejected=[];seen=set();counts={}
     for r in rows:
         if not set(r.get('filters',filters))&set(filters):continue
-        if r.get('Eu_K') is None or r['Eu_K']>energy:continue
-        if exclude and re.search(r'D(?![a-z])|\btrans\b|^t-',r['species']):continue
         fc=r['rest_GHz']/(1+z)
         if fc*(1+halfwidth/C)<low or fc*(1-halfwidth/C)>high:continue
-        out.append(dict(r,observed_GHz=fc))
-    return out
+        reasons=catalogue_exclusions(r,exclude,min_log_a,exclude_multiple_isotopes,exclude_excited)
+        if r.get('Eu_K') is None or not np.isfinite(r['Eu_K']):reasons.append('missing upper energy')
+        elif r['Eu_K']>energy:reasons.append('above upper energy threshold')
+        key=(r['species'],r['rest_GHz'],r.get('qns',''))
+        if key in seen:reasons.append('duplicate transition entry')
+        seen.add(key)
+        if reasons:
+            rejected.append(dict(r,exclusion_reasons=reasons))
+            for reason in reasons:counts[reason]=counts.get(reason,0)+1
+        else:out.append(dict(r,observed_GHz=fc))
+    audit=dict(selected=len(out),rejected=len(rejected),reason_counts=counts,excluded_lines=rejected)
+    return (out,audit) if return_audit else out
 
 
 def sidebands(n,lo,hi,width=10):

@@ -25,3 +25,15 @@ def test_example_detection_adoption_export_and_invalidation():
     next(n for n in app.number_input if n.label=='Radius / half-width (arcsec)').set_value(.04).run()
     assert any('Inputs or settings changed' in s.value for s in app.info)
     assert not any(b.label=='Generate maps & download bundle' for b in app.button)
+
+@pytest.mark.skipif(not (ROOT/'targets/ic860/alma/espada_b5_all/inputs/spw0_beam060.fits').exists(),reason='Local ALMA data are not bundled')
+def test_dense_catalogue_no_longer_blocked():
+    app=AppTest.from_file(str(ROOT/'app.py'),default_timeout=60).run()
+    app.radio[0].set_value('IC 860 prepared example').run()
+    next(m for m in app.multiselect if m.label=='Astronomical filters').set_value(['Hot Cores']).run()
+    next(c for c in app.checkbox if c.label=='Filter very weak transitions').uncheck().run()
+    next(c for c in app.checkbox if c.label=='Exclude multiple rare-isotope substitutions').uncheck().run()
+    next(b for b in app.button if b.label=='Run detection across all loaded SPWs').click().run()
+    assert not app.exception and not app.error, [e.value for e in app.error]
+    status=app.session_state['analysis']['status'][0]
+    assert status['Priors']>500 and status['Status']=='Completed'

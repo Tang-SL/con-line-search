@@ -176,3 +176,45 @@ positive integration widths on reversed axes, linear-continuum subtraction,
 invalid apertures, and FITS export. Streamlit tests exercise the empty app and,
 when local IC 860 data are linked, detection, manual adoption, map generation,
 and stale-result invalidation. The original ESPADA pilot remains unchanged.
+
+### Catalogue screening and candidate displays
+
+The interactive defaults now exclude deuterated species and trans conformers,
+explicit multiple rare-isotope substitutions, and transitions with
+`log10(A_ul / s^-1) < -5` or missing A values. The Eu<=300 K default remains.
+Single substitutions (including 13C, 15N, 18O, 34S and 30Si) are retained.
+Vibrational/torsional excitation is **not excluded by default**, since these
+transitions can be important in CONs. An optional excited-state filter uses
+explicit species/QN labels; combined entries such as vt=0-2 are retained unless
+the transition specifies an excited state. It is a label-based screen, not a
+complete quantum-number parser. The isotope rule recognizes explicit 13C, 15N,
+17O, 18O, 29Si, 30Si, 33S, 34S, 36S and 37Cl labels; other isotope encodings are
+not inferred. Exact duplicate species/frequency/QN rows are removed.
+
+The A threshold is an adjustable prioritization rule, **not a predicted line
+flux or evidence of non-detection**. It can remove real weak transitions, including
+the weak methanol association discussed in the original SPW0 pilot. Every search
+provides downloadable excluded transitions and reasons, and map manifests retain
+that audit and all filter settings. Counts per reason overlap. The archived
+pilot's catalogue selection and results remain unchanged.
+
+For the saved IC 860 SPW0 Hot Cores query, these defaults reduce the previous
+930 priors to 428. There is no longer a 500-prior failure: overlapping trial
+windows reuse measurements, and larger selections are allowed. Retained catalogue
+entries are hypotheses, not independent statistical trials.
+
+The catalogue databases distinguish Einstein A, line strength and integrated
+intensity at a reference temperature. This app uses the returned Einstein A
+field rather than mixing these quantities; see the
+[CDMS catalogue format](https://cdms.astro.uni-koeln.de/classic/predictions/description.html)
+and [CDMS search documentation](https://cdms.astro.uni-koeln.de/cgi-bin/cdmssearch).
+
+The detection spectrum labels all candidate features in the displayed SPW at
+their measured positions. Significant features have bold green labels, solid
+lines and diamond markers; provisional features use amber dotted lines and open
+circles. Hover reveals full alternative names and S/N. Significant table rows
+are also highlighted. Use the candidate selector to switch SPWs for inspection.
+
+Integrated-map previews default to 3x zoom around the extraction aperture, with
+an adjustable 1–8x control. This changes the displayed field only; downloaded
+FITS maps retain the complete image and WCS. The HTML preview retains the zoom.
