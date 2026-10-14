@@ -89,3 +89,25 @@ def test_default_filter_reduces_saved_hot_core_inventory():
     new=select_priors(*args)
     assert len(old)>500 and len(new)<500
     assert any(r['species']=='H2S' for r in new)
+
+
+def test_full_field_controls_use_identical_translated_pixel_stencils():
+    from types import SimpleNamespace
+    from conlines.core import aperture_mask
+    rng=np.random.default_rng(4)
+    c=SimpleNamespace(data=rng.normal(0,1,(3,1024,1024)).astype('float32'),pixel_arcsec=(.004,.004),beam_arcsec=.06)
+    for radius in [.12,.15,.20]:
+        ex=extract(c,511.3,510.7,'Circle',radius)
+        assert len(ex['controls'])>=8
+        yy,xx=np.nonzero(ex['mask'])
+        for spectrum,(cx,cy) in zip(ex['controls'],ex['control_centers']):
+            dx,dy=round(cx-511.3),round(cy-510.7)
+            assert np.allclose(spectrum,c.data[:,yy+dy,xx+dx].mean(axis=1))
+
+
+def test_requested_common_beam_keeps_full_shape_and_spatial_wcs():
+    c=synthetic();stream=io.BytesIO();fits.writeto(stream,c.data,c.header);stream.seek(0)
+    full=read_cube(stream,target_beam_arcsec=.04)
+    assert full.data.shape==c.data.shape
+    assert np.isclose(full.beam_arcsec,.04)
+    for key in ['CRPIX1','CRPIX2','CRVAL1','CRVAL2']:assert full.header[key]==c.header[key]

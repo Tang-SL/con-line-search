@@ -55,18 +55,23 @@ To use an existing CONs workspace without copying its cubes:
 python scripts/link_ic860_data.py /path/to/CONs
 ```
 
-This creates ignored local symlinks for the prepared common-beam cube directory
-and the spectrum/noise archive. Alternatively, place the original Sabine Band 5
-files under `targets/ic860/alma/Sabine/b5/`, then run:
+That links the **historical cropped pilot** inputs. The current interface uses
+separate full-field examples. Prepare them from the original Sabine Band 5 data:
 
 ```sh
-python scripts/ic860_espada_b5_all_prepare.py
+python scripts/ic860_fullfield_prepare.py /path/to/CONs/targets/ic860/alma/Sabine/b5
 ```
 
-That preparation script needs the continuum map and paired continuum-subtracted
-and +continuum cubes for all four SPWs. It writes the common-beam inputs and
-noise spectra consumed by the SPW0 example. The archived all-SPW review also
-requires its own ESPADA run; it is not needed for the catalogue pilot.
+This writes four ignored `targets/ic860/alma/fullfield/inputs/` FITS cubes,
+retaining all 1024 × 1024 spatial pixels and convolving each channel to the same
+0.060″ circular beam used in the pilot. Originals and historical 301 × 301
+cutouts are untouched. The continuum map supplies the default nucleus position.
+The preparation command refuses to overwrite existing outputs; `--spws 0` can
+prepare one SPW at a time. Allow about 2.6 GB disk space for all four outputs.
+
+To regenerate the archived pilot instead, place originals under
+`targets/ic860/alma/Sabine/b5/` and run
+`python scripts/ic860_espada_b5_all_prepare.py`.
 
 ## Reproduce the catalogue-guided pilot
 
@@ -109,31 +114,51 @@ Open http://127.0.0.1:8501. Cubes stay local. The interface now uses the real
 ESPADA/SoFiA 3D finder first, followed by **live Splatalogue only** for identification.
 Archived catalogue snapshots remain solely for reproducing the historical pilot.
 
-1. Upload multiple FITS cubes, supply local paths, or select the IC 860 examples.
+1. Upload multiple FITS cubes, supply local paths, or select the IC 860 full-field examples.
 2. Choose a circle, ellipse, rectangle or single pixel and inspect the extracted
    aperture-mean spectra and spatial noise controls. Default radius is one beam
    major-axis FWHM. Shared sky positions are projected onto each SPW separately.
+   The example defaults to the continuum nucleus position. Step 2 has a 3× preview
+   zoom; extraction and noise estimation always use the full loaded field. Controls
+   are integer-pixel translations of the exact source stencil, avoiding boundary
+   round-off changing their pixel counts. Set zoom to 1 to inspect the full field.
 3. Run ESPADA on each cube, independently of redshift and molecular catalogues.
    Both emission and absorption are enabled by default. Components whose masks
    intersect the aperture are listed with short feature IDs. All are labelled
    on the spectrum; green features pass the additional aperture significance screen.
-4. Fetch live Splatalogue matches for significant features (optionally provisional
-   ones too). Every explicit matching request fetches fresh data. Network failure
+4. Fetch live Splatalogue matches for all detected features by default (uncheck the provisional
+   option to restrict to significant ones). Every explicit matching request fetches fresh data. Network failure
    leaves detections available without substituting a saved catalogue. Changing
    catalogue filters or redshift does not invalidate detection or its significance.
-5. Review possible identifications separately, sorted by absolute velocity offset
-   within the adjustable default ±200 km/s tolerance. These are alternatives, not
-   probability rankings or confirmed molecular identifications. Detection centroids
-   come from the full ESPADA 3D component, not a new fit to the aperture spectrum.
-6. Adopt features, optionally assign transitions, edit integration intervals and
-   generate signed integrated maps. The default assignment is **Unidentified**.
-   Unidentified maps use the observed centroid as the velocity-width reference;
-   their FITS header has VREFGHZ instead of an assumed rest frequency/redshift.
-   Previews default to 3× zoom; exported FITS maps retain the full field.
+5. Step 4 proposes the closest frequency match for every queried feature, within
+   the adjustable default ±200 km/s tolerance. The overview table and spectrum
+   label these **tentative** suggestions. Use **Review identifications one by one**
+   to choose a transition or leave a feature unidentified, then **Confirm & next**.
+   This panel has its own spectrum and does not depend on Step 3's inspector.
+   Reviewed choices survive catalogue refreshes; a choice absent from the current
+   filtered catalogue is kept and identified as such in the review panel.
+6. Download a named solution as JSON or save it locally (ignored `solutions/`).
+   Load a local solution or upload its JSON later. Solutions include assignments,
+   review status, integration intervals, data fingerprints, aperture/detection
+   settings, redshift and original live-query provenance. Only matching analyses
+   are accepted; files may move to another path because identity is based on data
+   and WCS, not filenames. Reusing chosen assignments is distinct from querying
+   a catalogue: fresh alternatives always come from live Splatalogue.
+7. Select features for maps in Step 5. It uses Step 4's assignments automatically,
+   with no repeated transition selection. Unidentified maps use the observed
+   centroid as the velocity-width reference, recording VREFGHZ instead of an
+   assumed rest frequency/redshift. IDSTAT records TENTATIVE or REVIEWED.
+   Previews default to 3× zoom; FITS maps retain the full spatial field.
+
+Nearest frequency is not a physical identification or a probability ranking.
+Detection centroids come from the full ESPADA component, rather than a new fit
+of the aperture spectrum. Provisional features remain provisional even after a
+molecule is assigned. Solutions do not restore cubes or rerun detection for you;
+load the same data and settings, run detection, then load the solution.
 
 The ZIP export includes maps, interactive previews, feature table and provenance:
 ESPADA parameter files/logs, aperture settings, live query time/results/filter audit,
-and adopted transitions. Edited map intervals do not recompute detection significance.
+adopted transitions, and the reusable identification solution. Edited map intervals do not recompute detection significance.
 
 ### Detection and significance
 
@@ -181,6 +206,8 @@ spectral stacking or cross-SPW flux combination is performed.
 python -m pytest -q
 ```
 
-Local-data UI integration tests require ESPADA and SoFiA. Tests cover catalogue-free
-detection, independent identification settings, failed live queries, unidentified
-map export, stale aperture invalidation, labels, spectral conversion and baselines.
+UI tests use synthetic cubes and controlled detector/catalogue results. Tests cover
+sequential review, closest-match defaults, unidentified assignments, solution save/load,
+context mismatch rejection, map export, zoom independence, stale aperture invalidation,
+labels, spectral conversion and baselines. Real ESPADA/SoFiA is checked separately
+against the local full-field IC 860 data.

@@ -23,7 +23,7 @@ class Cube:
     notes: list
 
 
-def read_cube(source):
+def read_cube(source, target_beam_arcsec=None):
     """Accept conventional RA/DEC/spectral FITS with optional singleton Stokes."""
     with fits.open(source, memmap=False) as hd:
         h = hd[0].header.copy()
@@ -67,10 +67,12 @@ def read_cube(source):
             majors=minors=np.full(len(a),max(scales)/3600);pas=np.zeros(len(a))
             notes.append('No beam supplied; spatial controls use pixel-scale spacing.')
         variable=not (np.allclose(majors,majors[0],rtol=.001) and np.allclose(minors,minors[0],rtol=.001) and np.allclose(pas,pas[0],atol=.01))
-        if variable:
+        if variable or target_beam_arcsec is not None:
             if not np.isclose(scales[0],scales[1],rtol=.001): raise ValueError('Variable-beam convolution currently requires square pixels.')
             if not np.all(np.isfinite(a)): raise ValueError('Variable-beam cubes with blank pixels must be homogenized externally first.')
-            target=Beam(major=float(max(majors)*1.001)*u.deg,minor=float(max(majors)*1.001)*u.deg,pa=0*u.deg)
+            target_deg=float(target_beam_arcsec/3600) if target_beam_arcsec is not None else float(max(majors)*1.001)
+            if target_deg<=max(majors):raise ValueError('Target circular beam must be larger than every native beam.')
+            target=Beam(major=target_deg*u.deg,minor=target_deg*u.deg,pa=0*u.deg)
             for i in range(len(a)):
                 beam=Beam(major=majors[i]*u.deg,minor=minors[i]*u.deg,pa=pas[i]*u.deg)
                 kernel=target.deconvolve(beam).as_kernel(scales[0]*u.arcsec).array
@@ -109,17 +111,24 @@ def extract(cube, x, y, kind, radius, ratio=1., angle=0.):
     spec=spectrum(mask)
     if not np.all(np.isfinite(spec)):raise ValueError('Aperture intersects blank pixels; choose a smaller or different aperture.')
     controls=[];centers=[]
-    size=max(radius,cube.beam_arcsec/2,max(cube.pixel_arcsec))
+    # Translate the exact pixel stencil; recomputing ellipses at fractional centres
+    # can reject otherwise identical controls because of round-off at boundaries.
+    size=max(extent,cube.beam_arcsec/2,max(cube.pixel_arcsec))
     spacing=2.2*size
     step_x=max(1,int(np.ceil(spacing/cube.pixel_arcsec[0])));step_y=max(1,int(np.ceil(spacing/cube.pixel_arcsec[1])))
-    for cy in np.arange(y % step_y + step_y,ny-step_y,step_y):
-        for cx in np.arange(x % step_x + step_x,nx-step_x,step_x):
-            distance=np.hypot((cx-x)*cube.pixel_arcsec[0],(cy-y)*cube.pixel_arcsec[1])
-            if distance<3*size or distance>8*size or len(controls)>=64:continue
-            m=aperture_mask((ny,nx),cx,cy,kind,radius,ratio,angle,cube.pixel_arcsec)
-            if m.sum()!=mask.sum():continue
-            ss=spectrum(m)
-            if np.all(np.isfinite(ss)):controls.append(ss);centers.append([cx,cy])
+    my,mx=np.nonzero(mask);placements=[]
+    for dy in range(-ny//step_y*step_y,ny,step_y):
+        for dx in range(-nx//step_x*step_x,nx,step_x):
+            distance=np.hypot(dx*cube.pixel_arcsec[0],dy*cube.pixel_arcsec[1])
+            if distance<3*size or distance>8*size:continue
+            yy,xx=my+dy,mx+dx
+            if yy.min()<0 or yy.max()>=ny or xx.min()<0 or xx.max()>=nx:continue
+            ss=np.mean(a[:,yy,xx],axis=1)
+            if np.all(np.isfinite(ss)):placements.append((ss,[x+dx,y+dy]))
+    # Spread the capped sample across all valid positions, not just one image side.
+    if placements:
+        for j in np.linspace(0,len(placements)-1,min(64,len(placements)),dtype=int):
+            ss,center=placements[j];controls.append(ss);centers.append(center)
     if len(controls)<8:raise ValueError('Fewer than 8 non-overlapping control apertures fit outside the source. Reduce aperture size or upload a wider field.')
     controls=np.asarray(controls)
     noise=np.maximum(np.std(controls,axis=0,ddof=1),1.4826*np.median(abs(controls-np.median(controls,axis=0)),axis=0))

@@ -13,7 +13,7 @@ def chart_image(image,title,mask=None,controls=None,center=None,zoom=1.):
     fig.update_layout(title=title,height=430,margin=dict(l=10,r=10,t=45,b=10),xaxis_title='x pixel (zero-based)',yaxis_title='y pixel (zero-based)',showlegend=False,yaxis=dict(scaleanchor='x',constrain='domain',range=[ymin,ymin+2*halfy]),xaxis=dict(constrain='domain',range=[xmin,xmin+2*halfx]))
     return fig
 
-def spectrum_plot(cube,extraction,features=(),selected_id=None):
+def spectrum_plot(cube,extraction,features=(),selected_id=None,assignments=None):
     fig=go.Figure(go.Scatter(x=cube.frequency,y=extraction['spectrum'],mode='lines',line=dict(color='#167f83',shape='hv'),name='Aperture mean'))
     for y,name in [(3*extraction['noise'],'+3σ controls'),(-3*extraction['noise'],'−3σ controls')]:fig.add_trace(go.Scatter(x=cube.frequency,y=y,line=dict(color='#b5bec8',dash='dot'),name=name))
     shown=set()
@@ -24,6 +24,11 @@ def spectrum_plot(cube,extraction,features=(),selected_id=None):
         fig.add_vrect(x0=lo,x1=hi,fillcolor=color,opacity=.22 if significant else .07,line_width=0)
         fig.add_vline(x=q['frequency_GHz'],line_color=color,line_width=3 if selected or significant else 1,line_dash='solid' if significant else 'dot')
         label=q.get('id','feature')+' '+q.get('sign','')
+        assignment=(assignments or {}).get(q.get('id'),{})
+        line=assignment.get('transition')
+        if assignments is not None:
+            species=line['species'] if line else 'Unidentified'
+            label=q.get('id','feature')+' '+(species[:23]+'…' if len(species)>24 else species)+(' ?' if not assignment.get('reviewed') else '')
         snr='unavailable' if q['snr'] is None else f"{q['snr']:.2f}"
         status='Significant' if significant else 'Provisional'
         idx=int(np.argmin(abs(cube.frequency-q['frequency_GHz'])))
