@@ -1,0 +1,99 @@
+# con-line-search
+
+Catalogue-guided spectral-line searches in ALMA cubes, starting with IC 860
+Band 5 SPW0. This research prototype uses Splatalogue transition positions to
+prepare targeted windows for ESPADA/SoFiA, then checks feature robustness and
+retains competing molecular identifications.
+
+**Current scope:** IC 860-specific scripts and a worked example. This is not yet
+a general source-analysis package or an excitation/radiative-transfer model.
+
+![IC 860 catalogue positions and nuclear spectrum](targets/ic860/alma/catalogue_spw0/qa/catalogue_overview.png)
+
+## Example results
+
+The pilot searched 18 windows in emission and absorption. Eight distinct
+components were recovered; two absorption features pass the operational
+robustness screen. One is consistent with H2S. The other has ambiguous
+catalogue associations, including CH3OH and 30SiO. Feature detection does not
+establish a molecular identification.
+
+- [All prior positions and results](targets/ic860/alma/catalogue_spw0/qa/results.md)
+- [Window spectra](targets/ic860/alma/catalogue_spw0/qa/targeted_windows.png)
+- [Detailed method and limitations](targets/ic860/alma/catalogue_spw0/README.md)
+- [Earlier four-SPW baseline analysis](targets/ic860/alma/espada_b5_all/README.md)
+
+The +/-200 km/s windows cover 96% of SPW0; there is little search-bandwidth
+reduction. S/N thresholds are robustness criteria, not calibrated false-alarm
+probabilities. The published systemic redshift's exact reference frame remains
+to be verified before interpreting small velocity offsets.
+
+## Setup
+
+Use Python 3.12 and a separate virtual environment:
+
+```sh
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+Install [SoFiA 2](https://gitlab.com/SoFiA-Admin/SoFiA-2) separately and put its
+`sofia` executable on PATH. The pilot used SoFiA 2.7.1, commit
+`a7434d9f91605cd738f2b13cd31b1450304fbc11`, with WCSLIB 8.2.2 and ESPADA 1.0.1.
+ESPADA's SIP stage is disabled; no SIP installation is required for this workflow.
+
+## Local data
+
+Large FITS data, detector outputs, logs and environment files are excluded from
+Git. The repository includes catalogue query snapshots, parameters, plots and
+compact measurement results. The catalogue data remain third-party data from
+[Splatalogue](https://splatalogue.online/#/basic); consult its upstream sources
+and citation requirements when publishing results.
+
+To use an existing CONs workspace without copying its cubes:
+
+```sh
+python scripts/link_ic860_data.py /path/to/CONs
+```
+
+This creates ignored local symlinks for the prepared common-beam cube directory
+and the spectrum/noise archive. Alternatively, place the original Sabine Band 5
+files under `targets/ic860/alma/Sabine/b5/`, then run:
+
+```sh
+python scripts/ic860_espada_b5_all_prepare.py
+```
+
+That preparation script needs the continuum map and paired continuum-subtracted
+and +continuum cubes for all four SPWs. It writes the common-beam inputs and
+noise spectra consumed by the SPW0 example. The archived all-SPW review also
+requires its own ESPADA run; it is not needed for the catalogue pilot.
+
+## Reproduce the catalogue-guided pilot
+
+From the repository root, after local data setup:
+
+```sh
+# Optional: refresh the public catalogue queries (otherwise use saved snapshots).
+python scripts/ic860_spw0_catalogue_query.py
+python scripts/ic860_spw0_catalogue_prepare.py
+MPLBACKEND=Agg espada -c targets/ic860/alma/catalogue_spw0/config/espada.yaml
+python scripts/ic860_spw0_catalogue_review.py
+```
+
+Preparation regenerates absolute paths for the current checkout; no originating
+machine paths are required. The review reuses baseline measurement functions
+from `scripts/ic860_espada_b5_rank.py` without running its full four-SPW analysis.
+The copied snapshots retain their original scientific provenance; regenerated
+results can differ if the live catalogue or software versions change.
+
+## Development direction
+
+Separate source redshift/frame metadata, catalogue selection, targeted detection,
+blend hypotheses, joint multi-transition physical models, and injection/recovery
+validation. Retain non-detections and quantify upper limits under stated linewidth
+and excitation assumptions. Do not lower detection thresholds solely because a
+catalogue predicts a transition.
+
+No redistribution license for the project's original code has been selected yet.

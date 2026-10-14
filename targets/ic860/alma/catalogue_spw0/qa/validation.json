@@ -1,0 +1,117 @@
+{
+  "cutouts": [
+    {
+      "id": "L01",
+      "checksum": true,
+      "finite": true,
+      "wcs_delta_ms": 0.0
+    },
+    {
+      "id": "L02",
+      "checksum": true,
+      "finite": true,
+      "wcs_delta_ms": 0.0
+    },
+    {
+      "id": "L03",
+      "checksum": true,
+      "finite": true,
+      "wcs_delta_ms": 0.0
+    },
+    {
+      "id": "L04",
+      "checksum": true,
+      "finite": true,
+      "wcs_delta_ms": 0.0
+    },
+    {
+      "id": "L05",
+      "checksum": true,
+      "finite": true,
+      "wcs_delta_ms": 0.0
+    },
+    {
+      "id": "L06",
+      "checksum": true,
+      "finite": true,
+      "wcs_delta_ms": 0.0
+    },
+    {
+      "id": "L07",
+      "checksum": true,
+      "finite": true,
+      "wcs_delta_ms": 0.0
+    },
+    {
+      "id": "L08",
+      "checksum": true,
+      "finite": true,
+      "wcs_delta_ms": 0.0
+    },
+    {
+      "id": "L09",
+      "checksum": true,
+      "finite": true,
+      "wcs_delta_ms": 0.0
+    },
+    {
+      "id": "L10",
+      "checksum": true,
+      "finite": true,
+      "wcs_delta_ms": 0.0
+    },
+    {
+      "id": "L11",
+      "checksum": true,
+      "finite": true,
+      "wcs_delta_ms": 0.0
+    },
+    {
+      "id": "L12",
+      "checksum": true,
+      "finite": true,
+      "wcs_delta_ms": 0.0
+    },
+    {
+      "id": "L13",
+      "checksum": true,
+      "finite": true,
+      "wcs_delta_ms": 0.0
+    },
+    {
+      "id": "L14",
+      "checksum": true,
+      "finite": true,
+      "wcs_delta_ms": 0.0
+    },
+    {
+      "id": "L15",
+      "checksum": true,
+      "finite": true,
+      "wcs_delta_ms": 0.0
+    },
+    {
+      "id": "L16",
+      "checksum": true,
+      "finite": true,
+      "wcs_delta_ms": 0.0
+    },
+    {
+      "id": "L17",
+      "checksum": true,
+      "finite": true,
+      "wcs_delta_ms": 0.0
+    },
+    {
+      "id": "L18",
+      "checksum": true,
+      "finite": true,
+      "wcs_delta_ms": 0.0
+    }
+  ],
+  "all_cutouts_pass": true,
+  "sofia_no_source_exits": 18,
+  "other_failure_codes": [],
+  "espada_finished": true,
+  "queries": 36
+}

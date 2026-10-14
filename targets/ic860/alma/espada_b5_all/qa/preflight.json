@@ -1,0 +1,82 @@
+{
+  "center": "13h15m03.50529334s +24d37m07.802s",
+  "beam_arcsec": 0.06,
+  "cutout_arcsec": 1.204,
+  "PB_status": "unknown; no new correction",
+  "noise": "1.4826*MAD in annulus 0.35\u20130.55 arcsec, each channel after smoothing",
+  "continuum_subtraction": "no additional subtraction; compare paired input products",
+  "datasets": {
+    "spw0": {
+      "source_file": "IC860-spw0_H2S_20kms_natural.image.fits",
+      "nchan": 167,
+      "noise_mJy_beam_min_median_max": [
+        0.3342534601688385,
+        0.45314398407936096,
+        0.6268570423126221
+      ],
+      "aperture_pair_difference_mJy_beam_p16_median_p84": [
+        4.583353195339441,
+        4.6554370783269405,
+        4.75027384236455
+      ],
+      "core_SNR_min_max": [
+        -10.94875717163086,
+        4.526110649108887
+      ]
+    },
+    "spw1": {
+      "source_file": "IC860-spw1_20kms_natural.image.fits",
+      "nchan": 165,
+      "noise_mJy_beam_min_median_max": [
+        0.3379499316215515,
+        0.4310095012187958,
+        0.6312924027442932
+      ],
+      "aperture_pair_difference_mJy_beam_p16_median_p84": [
+        4.256291780620813,
+        4.348995629698038,
+        4.424363933503628
+      ],
+      "core_SNR_min_max": [
+        -12.680612564086914,
+        7.366382122039795
+      ]
+    },
+    "spw2": {
+      "source_file": "IC860-spw2_20kms_natural.image.fits",
+      "nchan": 155,
+      "noise_mJy_beam_min_median_max": [
+        0.7052385210990906,
+        1.0900311470031738,
+        18.212955474853516
+      ],
+      "aperture_pair_difference_mJy_beam_p16_median_p84": [
+        3.539024740457535,
+        3.9978562854230404,
+        4.418048392981291
+      ],
+      "core_SNR_min_max": [
+        -4.721861362457275,
+        7.091004848480225
+      ]
+    },
+    "spw3": {
+      "source_file": "IC860-spw3_H2O_20kms_natural.image.fits",
+      "nchan": 154,
+      "noise_mJy_beam_min_median_max": [
+        1.2325246334075928,
+        2.4800539016723633,
+        32.90980529785156
+      ],
+      "aperture_pair_difference_mJy_beam_p16_median_p84": [
+        3.940025307238102,
+        4.420750075951219,
+        5.077192820608616
+      ],
+      "core_SNR_min_max": [
+        -2.0114529132843018,
+        7.338188171386719
+      ]
+    }
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "spw0_beam060.fits": {
+    "shape": [
+      167,
+      301,
+      301
+    ],
+    "checksum": true,
+    "finite": true
+  },
+  "spw0_pluscont_beam060.fits": {
+    "shape": [
+      167,
+      301,
+      301
+    ],
+    "checksum": true,
+    "finite": true
+  },
+  "spw1_beam060.fits": {
+    "shape": [
+      165,
+      301,
+      301
+    ],
+    "checksum": true,
+    "finite": true
+  },
+  "spw1_pluscont_beam060.fits": {
+    "shape": [
+      165,
+      301,
+      301
+    ],
+    "checksum": true,
+    "finite": true
+  },
+  "spw2_beam060.fits": {
+    "shape": [
+      155,
+      301,
+      301
+    ],
+    "checksum": true,
+    "finite": true
+  },
+  "spw2_pluscont_beam060.fits": {
+    "shape": [
+      155,
+      301,
+      301
+    ],
+    "checksum": true,
+    "finite": true
+  },
+  "spw3_beam060.fits": {
+    "shape": [
+      154,
+      301,
+      301
+    ],
+    "checksum": true,
+    "finite": true
+  },
+  "spw3_pluscont_beam060.fits": {
+    "shape": [
+      154,
+      301,
+      301
+    ],
+    "checksum": true,
+    "finite": true
+  }
+}

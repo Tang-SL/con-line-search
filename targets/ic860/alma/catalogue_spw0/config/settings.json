@@ -1,0 +1,17 @@
+{
+  "z": 0.0129422868936883,
+  "cz_optical_kms": 3880,
+  "systemic_uncertainty_kms": 20,
+  "velocity_halfwidth_kms": 200,
+  "upper_energy_max_K": 300,
+  "padding_channels": 5,
+  "primary_filter": "extragalactic",
+  "alternative_filter": "ism-hot-core",
+  "source": "https://arxiv.org/abs/1905.07275",
+  "frame_note": "Published cz adopted as working redshift; paper does not explicitly identify reference frame in systemic-velocity paragraph. Cube is LSRK; no unverified frame correction applied.",
+  "exclusions": [
+    "deuterated species (uppercase D atom)",
+    "trans conformers"
+  ],
+  "catalogue_query_utc": "2026-10-14T12:09:50.255776+00:00"
+}

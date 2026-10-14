@@ -1,0 +1,19 @@
+# Local data, detector products and tools
+.local-tools/
+.venv/
+.env
+.env.*
+__pycache__/
+*.py[cod]
+.DS_Store
+*.fits
+*.fits.gz
+*.fit
+*.ms/
+*.log
+**/Sabine
+**/inputs
+**/run/
+**/config/espada.yaml
+**/config/pilot.yaml
+**/qa/spectra.npz

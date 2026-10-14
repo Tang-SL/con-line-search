@@ -1,0 +1,13 @@
+{
+  "observed_GHz": [
+    166.02382853733533,
+    167.86858653733393
+  ],
+  "normalized_rows": 2365,
+  "excluded": 164,
+  "primary_entries": 23,
+  "groups": 18,
+  "target_channels": 160,
+  "total_channels": 167,
+  "coverage_fraction": 0.9580838323353293
+}

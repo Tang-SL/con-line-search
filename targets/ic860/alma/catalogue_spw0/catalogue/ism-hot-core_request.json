@@ -1,0 +1,24 @@
+{
+  "searchSpeciesAutocomplete": "",
+  "quickPickerMolecules": [],
+  "telescopeBands": [
+    "any"
+  ],
+  "energyFrom": "",
+  "energyTo": "",
+  "energyValue": "el-1",
+  "frequenciesFrom": [
+    "168.06036390412356"
+  ],
+  "frequenciesTo": [
+    "170.15462921607872"
+  ],
+  "frequenciesUnit": "GHz",
+  "frequencyRedshift": 0,
+  "astronomicalFilters": "ism-hot-core",
+  "exportType": "current",
+  "exportDelimiter": "tab",
+  "exportLimit": "allRecords",
+  "exportStart": 1,
+  "exportStop": 250
+}

@@ -1,0 +1,157 @@
+# SoFiA 2 parameter file for the official SoFiA test datacube
+
+
+# Global settings
+
+pipeline.verbose           =  false
+pipeline.pedantic          =  true
+
+
+# Input
+
+input.region               =
+input.gain                 =
+input.noise                =
+input.weights              =
+
+
+# Flagging
+
+flag.region                =
+flag.catalog               =
+flag.radius                =  5
+flag.auto                  =  false
+flag.threshold             =  5.0
+flag.log                   =  false
+flag.cube                  =
+
+
+# Continuum subtraction
+
+contsub.enable             =  false
+contsub.order              =  0
+contsub.threshold          =  2.0
+contsub.shift              =  4
+contsub.padding            =  3
+
+
+# Noise scaling
+
+scaleNoise.enable = true
+scaleNoise.mode = spectral
+scaleNoise.statistic       =  mad
+scaleNoise.fluxRange = both
+scaleNoise.windowXY        =  31
+scaleNoise.windowZ         =  31
+scaleNoise.gridXY          =  0
+scaleNoise.gridZ           =  0
+scaleNoise.interpolate     =  false
+scaleNoise.scfind          =  false
+
+
+# Background subtraction
+
+background.enable        =  false
+background.statistic     =  median
+background.windowXY      =  31
+background.windowZ       =  15
+background.gridXY        =  0
+background.gridZ         =  0
+background.interpolate   =  false
+
+
+# S+C finder
+
+scfind.enable              =  true
+scfind.kernelsXY = 0, 15
+scfind.kernelsZ = 0, 3, 5
+scfind.threshold = 5.0
+scfind.replacement         =  2.0
+scfind.statistic           =  mad
+scfind.fluxRange = both
+
+
+# Threshold finder
+
+threshold.enable           =  false
+threshold.threshold        =  5.0
+threshold.mode             =  relative
+threshold.statistic        =  mad
+threshold.fluxRange        =  negative
+
+
+# Linker
+
+linker.enable              =  true
+linker.radiusXY = 3
+linker.radiusZ = 1
+linker.minSizeXY = 5
+linker.minSizeZ = 2
+linker.maxSizeXY           =  0
+linker.maxSizeZ            =  0
+linker.minPixels = 50
+linker.maxPixels           =  0
+linker.minFill             =  0.05
+linker.maxFill             =  0.0
+linker.positivity = true
+
+
+# Reliability
+
+reliability.enable = false
+reliability.parameters     =  peak, sum, mean
+reliability.threshold      =  0.9
+reliability.scaleKernel    =  0.3
+reliability.autoKernel     =  true
+reliability.iterations     =  50
+reliability.tolerance      =  0.05
+reliability.catalog        =
+reliability.plot = false
+reliability.debug          =  false
+
+# Filter
+
+filter.discardNegative = true
+filter.minSNR = 0
+filter.minPixels = 0
+
+
+# Mask dilation
+
+dilation.enable = false
+dilation.iterationsXY      =  10
+dilation.iterationsZ       =  5
+dilation.threshold         =  0.001
+
+
+# Parameterisation
+
+parameter.enable           =  true
+parameter.wcs              =  true
+parameter.physical         =  true
+parameter.prefix           =  ESPADA
+parameter.offset           =  false
+
+
+# Output
+
+output.filename            =
+output.dataFormat          =
+output.writeCatASCII       =  true
+output.writeCatXML         =  true
+output.writeCatSQL         =  false
+output.writeDiagnosticPlot = false
+output.writeKarma          =  false
+output.writeNoise = true
+output.writeFiltered       =  false
+output.writeMask           =  true
+output.writeMask2d         =  true
+output.writeRawMask        =  false
+output.writeMoments        =  true
+output.writeCubelets       =  true
+output.writePV = true
+output.marginAperSpec      =  10
+output.marginCubeletsXY    =  10
+output.marginCubeletsZ     =  10
+output.thresholdMom12      =  0.0
+output.overwrite = true

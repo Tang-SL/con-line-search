@@ -1,0 +1,218 @@
+[
+  {
+    "prior": "L01",
+    "mode": "absorption",
+    "catalogue_exists": false,
+    "accepted": 0
+  },
+  {
+    "prior": "L01",
+    "mode": "emission",
+    "catalogue_exists": false,
+    "accepted": 0
+  },
+  {
+    "prior": "L02",
+    "mode": "absorption",
+    "catalogue_exists": false,
+    "accepted": 0
+  },
+  {
+    "prior": "L02",
+    "mode": "emission",
+    "catalogue_exists": false,
+    "accepted": 0
+  },
+  {
+    "prior": "L03",
+    "mode": "absorption",
+    "catalogue_exists": false,
+    "accepted": 0
+  },
+  {
+    "prior": "L03",
+    "mode": "emission",
+    "catalogue_exists": false,
+    "accepted": 0
+  },
+  {
+    "prior": "L04",
+    "mode": "absorption",
+    "catalogue_exists": false,
+    "accepted": 0
+  },
+  {
+    "prior": "L04",
+    "mode": "emission",
+    "catalogue_exists": false,
+    "accepted": 0
+  },
+  {
+    "prior": "L05",
+    "mode": "absorption",
+    "catalogue_exists": false,
+    "accepted": 0
+  },
+  {
+    "prior": "L05",
+    "mode": "emission",
+    "catalogue_exists": true,
+    "accepted": 0
+  },
+  {
+    "prior": "L06",
+    "mode": "absorption",
+    "catalogue_exists": true,
+    "accepted": 1
+  },
+  {
+    "prior": "L06",
+    "mode": "emission",
+    "catalogue_exists": true,
+    "accepted": 2
+  },
+  {
+    "prior": "L07",
+    "mode": "absorption",
+    "catalogue_exists": true,
+    "accepted": 1
+  },
+  {
+    "prior": "L07",
+    "mode": "emission",
+    "catalogue_exists": true,
+    "accepted": 2
+  },
+  {
+    "prior": "L08",
+    "mode": "absorption",
+    "catalogue_exists": true,
+    "accepted": 1
+  },
+  {
+    "prior": "L08",
+    "mode": "emission",
+    "catalogue_exists": true,
+    "accepted": 2
+  },
+  {
+    "prior": "L09",
+    "mode": "absorption",
+    "catalogue_exists": false,
+    "accepted": 0
+  },
+  {
+    "prior": "L09",
+    "mode": "emission",
+    "catalogue_exists": false,
+    "accepted": 0
+  },
+  {
+    "prior": "L10",
+    "mode": "absorption",
+    "catalogue_exists": false,
+    "accepted": 0
+  },
+  {
+    "prior": "L10",
+    "mode": "emission",
+    "catalogue_exists": false,
+    "accepted": 0
+  },
+  {
+    "prior": "L11",
+    "mode": "absorption",
+    "catalogue_exists": true,
+    "accepted": 0
+  },
+  {
+    "prior": "L11",
+    "mode": "emission",
+    "catalogue_exists": true,
+    "accepted": 0
+  },
+  {
+    "prior": "L12",
+    "mode": "absorption",
+    "catalogue_exists": true,
+    "accepted": 1
+  },
+  {
+    "prior": "L12",
+    "mode": "emission",
+    "catalogue_exists": true,
+    "accepted": 1
+  },
+  {
+    "prior": "L13",
+    "mode": "absorption",
+    "catalogue_exists": true,
+    "accepted": 1
+  },
+  {
+    "prior": "L13",
+    "mode": "emission",
+    "catalogue_exists": true,
+    "accepted": 1
+  },
+  {
+    "prior": "L14",
+    "mode": "absorption",
+    "catalogue_exists": false,
+    "accepted": 0
+  },
+  {
+    "prior": "L14",
+    "mode": "emission",
+    "catalogue_exists": true,
+    "accepted": 1
+  },
+  {
+    "prior": "L15",
+    "mode": "absorption",
+    "catalogue_exists": false,
+    "accepted": 0
+  },
+  {
+    "prior": "L15",
+    "mode": "emission",
+    "catalogue_exists": true,
+    "accepted": 1
+  },
+  {
+    "prior": "L16",
+    "mode": "absorption",
+    "catalogue_exists": false,
+    "accepted": 0
+  },
+  {
+    "prior": "L16",
+    "mode": "emission",
+    "catalogue_exists": true,
+    "accepted": 1
+  },
+  {
+    "prior": "L17",
+    "mode": "absorption",
+    "catalogue_exists": false,
+    "accepted": 0
+  },
+  {
+    "prior": "L17",
+    "mode": "emission",
+    "catalogue_exists": true,
+    "accepted": 1
+  },
+  {
+    "prior": "L18",
+    "mode": "absorption",
+    "catalogue_exists": false,
+    "accepted": 0
+  },
+  {
+    "prior": "L18",
+    "mode": "emission",
+    "catalogue_exists": true,
+    "accepted": 1
+  }
+]

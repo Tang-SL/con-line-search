@@ -1,0 +1,9 @@
+# Python 3.12; versions used for the IC 860 pilot.
+numpy==2.5.4
+astropy==8.0.1
+scipy==1.18.1
+matplotlib==3.11.2
+radio-beam==0.3.10
+PyYAML==6.0.3
+requests==2.34.2
+espada-astro==1.0.1
