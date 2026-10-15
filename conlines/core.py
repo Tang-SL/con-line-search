@@ -148,7 +148,13 @@ def query_catalogue(low, high, filters):
             clean=lambda s:html.unescape(re.sub('<[^>]*>','',s or '')).strip()
             freq=float(r['orderedFreq'].split(',')[0]);key=(r['species_id'],freq,clean(r['resolved_QNs']))
             if key in rows:rows[key]['filters'].append(filt);continue
-            rows[key]=dict(species=clean(r['species_name']),rest_GHz=freq,qns=clean(r['resolved_QNs']),Eu_K=float(r['euk']) if r.get('euk') else None,log10_A_s=float(r['aij']) if r.get('aij') else None,filters=[filt])
+            rows[key]=dict(species=clean(r['species_name']),species_id=r['species_id'],
+                           catalogue=clean(r.get('linelists')),recommended=r.get('nraorecommended'),
+                           frequency_text=clean(r['orderedFreq']),
+                           rest_GHz=freq,qns=clean(r['resolved_QNs']),
+                           Eu_K=float(r['euk']) if r.get('euk') else None,
+                           El_K=float(r['elk']) if r.get('elk') else None,
+                           log10_A_s=float(r['aij']) if r.get('aij') else None,filters=[filt])
     return list(rows.values())
 
 

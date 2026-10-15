@@ -130,6 +130,9 @@ Archived catalogue snapshots remain solely for reproducing the historical pilot.
    option to restrict to significant ones). Every explicit matching request fetches fresh data. Network failure
    leaves detections available without substituting a saved catalogue. Changing
    catalogue filters or redshift does not invalidate detection or its significance.
+   Queries now cover each loaded SPW's full frequency range, including SPWs with
+   no detections. Species IDs, catalogue names, lower energies and the original
+   frequency text are retained alongside the existing transition metadata.
 5. Step 4 proposes the closest frequency match for every queried feature, within
    the adjustable default ±200 km/s tolerance. The overview table and spectrum
    label these **tentative** suggestions. Use **Review identifications one by one**
@@ -137,6 +140,15 @@ Archived catalogue snapshots remain solely for reproducing the historical pilot.
    This panel has its own spectrum and does not depend on Step 3's inspector.
    Reviewed choices survive catalogue refreshes; a choice absent from the current
    filtered catalogue is kept and identified as such in the review panel.
+   The **Evidence for this identification** panel shows the aperture centroid,
+   its estimated error, the signed second-moment width, catalogue metadata and
+   other transitions of the same catalogue species entry. Companion matches must
+   lie inside another feature's interval and agree with the candidate's velocity
+   offset within the adjustable default 50 km/s. Significant and provisional
+   features are counted separately; multiple transitions in one feature count
+   once. Opposite-sign features and uncertain centroids are shown separately.
+   A companion spectrum viewer marks the predicted position at that velocity.
+   These are frequency-compatibility checks, not identification probabilities.
 6. Download a named solution as JSON or save it locally (ignored `solutions/`).
    Load a local solution or upload its JSON later. Solutions include assignments,
    review status, integration intervals, data fingerprints, aperture/detection
@@ -151,10 +163,30 @@ Archived catalogue snapshots remain solely for reproducing the historical pilot.
    Previews default to 3× zoom; FITS maps retain the full spatial field.
 
 Nearest frequency is not a physical identification or a probability ranking.
-Detection centroids come from the full ESPADA component, rather than a new fit
-of the aperture spectrum. Provisional features remain provisional even after a
-molecule is assigned. Solutions do not restore cubes or rerun detection for you;
-load the same data and settings, run detection, then load the solution.
+Matching now uses signed aperture moments inside the original ESPADA interval
+when measurable. The original 3D centroid is retained for stable feature identity
+and is an explicitly labelled fallback when aperture S/N is below 3, the line
+sign disagrees, baseline coverage is incomplete, or the centroid is unstable.
+Moment errors propagate whole control spectra (including channel correlations)
+and constant/linear baseline differences. They are conditional estimates, not
+calibrated confidence intervals, and omit systemic-redshift/frame uncertainty.
+The width is a second-moment sigma within the detector interval, not a fitted
+Gaussian FWHM or an instrumental-resolution-corrected width. Blending and interval
+truncation can affect both measurements.
+
+Companion evidence uses only successful current live queries and active catalogue
+filters. Missing catalogue queries and failed detection runs are labelled
+unavailable. Cross-SPW comparisons require linked apertures and identical known
+spectral frames. No intensity ratios are compared, and a missing detection incurs
+no penalty: an excitation/opacity model would be needed to predict detectability.
+No fixed number of companion lines is required for a suggestion.
+
+Provisional features remain provisional even after a molecule is assigned.
+Solutions now also include aperture measurements and an evidence snapshot, while
+remaining compatible with earlier version-1 solutions. Loading a solution does
+not make its historical evidence current; fetch live matches again. Solutions do
+not restore cubes or rerun detection for you; load the same data and settings,
+run detection, then load the solution.
 
 The ZIP export includes maps, interactive previews, feature table and provenance:
 ESPADA parameter files/logs, aperture settings, live query time/results/filter audit,

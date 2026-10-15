@@ -9,6 +9,8 @@ from conlines.espada_backend import run_espada, aperture_features, match_feature
 from conlines.plots import chart_image, spectrum_plot
 from conlines.solutions import cube_fingerprint, feature_fingerprint, digest
 from conlines.review_ui import identification_review
+from conlines.measurements import matching_frequency
+from conlines.evidence import add_evidence
 from astropy.wcs import WCS
 from conlines.core import read_cube,extract,query_catalogue,select_priors,moment,fits_bytes,C
 
@@ -56,6 +58,7 @@ with st.sidebar:
     st.caption('Default A ≥10⁻⁵ s⁻¹ is a screening choice, not a flux prediction. Weak transitions and multiple isotopic substitutions can still be real. Disable these filters for completeness checks.')
     st.caption('Catalogue source: live Splatalogue only. Each matching request fetches fresh results; no saved fallback.')
     halfwidth=st.number_input('Catalogue match ± velocity (km/s)',20.,2000.,200.,step=20.)
+    companion_tolerance=st.number_input('Companion velocity agreement (km/s)',5.,500.,50.,step=5.,help='Other transitions must coincide with a detected feature at the same velocity offset within this tolerance. This is a compatibility check, not a probability.')
     st.divider();st.subheader('Detection settings')
     clip=st.number_input('ESPADA voxel threshold (σ)',3.,10.,5.,step=.5)
     continuum_subtracted=st.checkbox('Input cubes are continuum-subtracted',True)
@@ -145,7 +148,7 @@ st.subheader('3 · Detect and review features with ESPADA')
 st.caption('ESPADA/SoFiA searches the 3D cube without a line catalogue. Components intersecting your aperture are screened using its extracted spectrum and spatial noise controls. Green features pass the integrated S/N and baseline checks; amber features require review. Neither threshold is a search-wide false-alarm probability.')
 detection_settings=dict(engine='espada-v2-fullfield',threshold=threshold,widths=sorted(widths),mode=mode,clip=clip,continuum_subtracted=continuum_subtracted)
 detection_context=dict(datasets=sorted([dict(fingerprint=v['fingerprint'],aperture={name:round(value,8) if isinstance(value,float) else value for name,value in configs[k].items()}) for k,v in loaded.items()],key=lambda v:v['fingerprint']),settings=detection_settings)
-signature=digest(dict(context=detection_context,bindings=list(loaded)))
+signature=digest(dict(context=detection_context,bindings=list(loaded),measurement_version=1))
 if st.button('Run detection across all loaded SPWs',type='primary',disabled=not extractions or not widths):
     results={};status=[];runs={}
     for i,(k,ex) in enumerate(extractions.items()):
@@ -169,7 +172,8 @@ rows=[];lookup={}
 for k,features in analysis['results'].items():
     for q in features:
         lookup[q['id']]=(k,q)
-        rows.append(dict(ID=q['id'],SPW=loaded[k]['name'],Sign=q['sign'],SNR=round(q['snr'],2) if q['snr'] is not None else None,Significant=q['significant'],Observed_GHz=q['frequency_GHz'],Start=q['lo'],End=q['hi'],Flags=', '.join(q['flags'])))
+        measurement=q.get('aperture_measurement',{})
+        rows.append(dict(ID=q['id'],SPW=loaded[k]['name'],Sign=q['sign'],SNR=round(q['snr'],2) if q['snr'] is not None else None,Significant=q['significant'],Observed_GHz=matching_frequency(q),Centroid='Aperture' if measurement.get('reliable') else 'ESPADA fallback',Centroid_error_kms=measurement.get('centroid_error_kms') if measurement.get('reliable') else None,Sigma_kms=measurement.get('sigma_kms') if measurement.get('reliable') else None,Start=q['lo'],End=q['hi'],Flags=', '.join(q['flags'])))
 if not rows:st.info('No ESPADA components intersect this aperture. Try another aperture or inspect detection settings.');st.stop()
 if not any(r['Significant'] for r in rows):st.info('No features pass the current aperture significance screen. ESPADA components remain below for provisional review; enable “Also match provisional features” to inspect their possible identifications.')
 solution_context=dict(detection=detection_context,redshift=z)
@@ -179,28 +183,30 @@ restored_intervals=st.session_state.get('solution_intervals_'+solution_scope,{})
 for row in rows:
     if row['ID'] in restored_intervals:row['Start'],row['End']=restored_intervals[row['ID']]
 st.write('Feature IDs describe detections, not molecule assignments. Integration channels are zero-based and inclusive. Editing them changes maps only; the reported significance belongs to the original ESPADA interval.')
-edited=st.data_editor(pd.DataFrame(rows).style.apply(lambda row: ['background-color: #d9f0e7; color: #075e46' if row['Significant'] else '' for _ in row],axis=1),hide_index=True,width='stretch',key='review_'+signature+'_'+str(st.session_state.get('interval_revision_'+solution_scope,0)),disabled=['ID','SPW','Sign','SNR','Significant','Observed_GHz','Flags'],column_config={'Start':st.column_config.NumberColumn(min_value=0,step=1),'End':st.column_config.NumberColumn(min_value=0,step=1)})
+st.caption('Observed frequency uses the signed aperture centroid when measurable; otherwise it explicitly falls back to ESPADA. Sigma is the second-moment width inside the original interval, not a Gaussian FWHM. Errors include spatial-control noise and baseline sensitivity; they exclude source-redshift uncertainty.')
+edited=st.data_editor(pd.DataFrame(rows).style.apply(lambda row: ['background-color: #d9f0e7; color: #075e46' if row['Significant'] else '' for _ in row],axis=1),hide_index=True,width='stretch',key='review_'+signature+'_'+str(st.session_state.get('interval_revision_'+solution_scope,0)),disabled=[c for c in rows[0] if c not in ['Start','End']],column_config={'Start':st.column_config.NumberColumn(min_value=0,step=1),'End':st.column_config.NumberColumn(min_value=0,step=1)})
 inspect=st.selectbox('Inspect feature',list(lookup),format_func=lambda ident:f"{ident} · {lookup[ident][1]['sign']}")
 k,q=lookup[inspect];st.plotly_chart(spectrum_plot(loaded[k]['cube'],extractions[k],analysis['results'][k],selected_id=inspect),width='stretch',key='inspect_'+inspect)
 
 st.subheader('4 · Identify features with live Splatalogue')
-st.caption('Matches use measured feature centroids and your redshift/velocity tolerance. They are frequency-compatible alternatives, sorted by absolute velocity offset—not confirmed identifications or probability rankings. Other transitions and excitation consistency are needed to distinguish species and blends.')
+st.caption('Matches use aperture centroids where measurable and remain sorted by absolute velocity offset. The evidence panel checks other transitions across the full loaded SPW coverage. Frequency compatibility and manual review do not establish a molecular identification.')
 include_provisional=st.checkbox('Also match provisional features',True)
-match_settings=dict(detection=signature,z=z,tolerance=halfwidth,filters=selected_filters,energy=energy,exclude=exclude,min_log_a=min_log_a,exclude_multiple=exclude_multiple,exclude_excited=exclude_excited,include_provisional=include_provisional)
+match_settings=dict(detection=signature,z=z,tolerance=halfwidth,filters=selected_filters,energy=energy,exclude=exclude,min_log_a=min_log_a,exclude_multiple=exclude_multiple,exclude_excited=exclude_excited,include_provisional=include_provisional,companion_tolerance=companion_tolerance,linked_apertures=linked)
 match_signature=hashlib.sha256(json.dumps(match_settings,sort_keys=True).encode()).hexdigest()
 if st.button('Match features with live Splatalogue',disabled=not selected_filters):
-    matches={};audits={};catalogues={};query_status=[]
-    for k,features in analysis['results'].items():
+    matches={};audits={};catalogues={};selected_catalogues={};query_status=[]
+    for k,item in loaded.items():
+        features=analysis['results'].get(k,[])
         targets=[q for q in features if q['significant'] or include_provisional]
-        if not targets:continue
-        low=min(q['frequency_GHz'] for q in targets);high=max(q['frequency_GHz'] for q in targets)
+        low=float(min(item['cube'].frequency));high=float(max(item['cube'].frequency))
         try:
             with st.spinner(f"Fetching live Splatalogue for {loaded[k]['name']}…"):
                 raw=query_catalogue(low*(1+z)/(1+halfwidth/C),high*(1+z)/(1-halfwidth/C),selected_filters)
                 selected,audit=select_priors(raw,low,high,z,halfwidth,energy,selected_filters,exclude,min_log_a,exclude_multiple,exclude_excited,return_audit=True)
-                matches.update(match_features(targets,selected,z,halfwidth));audits[k]=audit;catalogues[k]=raw
+                matches.update(match_features(targets,selected,z,halfwidth));audits[k]=audit;catalogues[k]=raw;selected_catalogues[k]=selected
                 query_status.append(dict(SPW=loaded[k]['name'],Status='Live query completed',Transitions=len(selected)))
         except Exception as e:query_status.append(dict(SPW=loaded[k]['name'],Status=f'Live query failed: {e}'))
+    matches=add_evidence(matches,lookup,selected_catalogues,loaded,z,companion_tolerance,linked,analysis['results'])
     st.session_state['identifications']=dict(signature=match_signature,matches=matches,audits=audits,catalogues=catalogues,status=query_status,queried_utc=datetime.now(timezone.utc).isoformat(),settings=match_settings)
 identifications=st.session_state.get('identifications')
 if identifications and identifications['signature']!=match_signature:
@@ -230,12 +236,12 @@ if st.button('Generate maps & download bundle',type='primary'):
             k,q=lookup[r.ID];cube=loaded[k]['cube'];line=choices[r.ID]
             try:
                 lo,hi=int(r.Start),int(r.End)
-                im,h=moment(cube,lo,hi,line['rest_GHz'] if line else q['frequency_GHz'],z if line else 0.,baseline)
+                im,h=moment(cube,lo,hi,line['rest_GHz'] if line else matching_frequency(q),z if line else 0.,baseline)
                 label=line['species'] if line else 'Unidentified '+r.ID
                 if line is None:
                     for keyword in ['RESTFRQ','RESTFREQ','REDSHIFT']:
                         if keyword in h:del h[keyword]
-                    h['VREFGHZ']=(q['frequency_GHz'],'Observed reference for velocity channel widths')
+                    h['VREFGHZ']=(matching_frequency(q),'Observed reference for velocity channel widths')
                 h['IDSTAT']='REVIEWED' if assignments[r.ID]['reviewed'] else 'TENTATIVE'
                 h['LINEID']=label.encode('ascii','backslashreplace').decode();h['SRCFILE']=loaded[k]['name'].encode('ascii','backslashreplace').decode();h.add_history('Aperture: '+json.dumps(configs[k]))
                 archive.writestr(r.ID+'.fits',fits_bytes(im,h))

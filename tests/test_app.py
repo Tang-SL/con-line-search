@@ -73,6 +73,8 @@ def test_batch_suggestions_sequential_review_save_load_and_maps(workbench,monkey
     assert not app.exception
     by_label(app.button,'Review identifications one by one').click().run()
     assert by_label(app.selectbox,'Identification choice').value==0
+    assert any('Evidence for this identification' in m.value for m in app.markdown)
+    assert any('Other compatible features' in m.value for m in app.markdown)
     by_label(app.selectbox,'Identification choice').set_value(-1).run()
     by_label(app.button,'Confirm & next').click().run()
     assert by_label(app.selectbox,'Inspect feature').value==inspect
@@ -82,6 +84,9 @@ def test_batch_suggestions_sequential_review_save_load_and_maps(workbench,monkey
     by_label(app.button,'Save solution locally').click().run()
     saved=list((tmp/'solutions').glob('*.json'));assert len(saved)==1
     payload=json.loads(saved[0].read_text());assert all(q['assignment']['reviewed'] for q in payload['features'])
+    assert payload['measurement_method']=='signed aperture moments v1'
+    assert payload['features'][0]['aperture_measurement']['reliable']
+    assert payload['evidence_snapshot']['queried_utc']
     assert payload['features'][0]['assignment']['transition'] is None
     assert payload['features'][1]['assignment']['transition']['species']=='Molecule 1'
     payload['features'][0]['lo']=28;payload['features'][0]['hi']=34
@@ -106,3 +111,29 @@ def test_batch_suggestions_sequential_review_save_load_and_maps(workbench,monkey
     assert 'RESTFRQ' not in headers[0] and 'VREFGHZ' in headers[0]
     assert all(h['IDSTAT']=='REVIEWED' for h in headers)
     assert headers[1]['LINEID']=='Molecule 1'
+
+
+def test_full_coverage_query_includes_spw_without_features(workbench,monkeypatch):
+    import conlines.core
+    import conlines.espada_backend
+    app,tmp=workbench
+    original=conlines.espada_backend.run_espada
+    monkeypatch.setattr(conlines.espada_backend,'run_espada',lambda cube,*a,**kw:dict(components=[],status={},parameters={},console_log='empty SPW') if cube.frequency.max()>171 else original(cube,*a,**kw))
+    c=synthetic();c.header['CRVAL3']=172e9
+    second=tmp/'second.fits';fits.writeto(second,c.data,c.header)
+    app.text_area[0].set_value(str(tmp/'cube.fits')+'\n'+str(second)).run()
+    by_label(app.button,'Run detection across all loaded SPWs').click().run()
+    assert not app.exception
+    z=by_label(app.number_input,'Redshift z').value
+    calls=[]
+    def query(low,high,filters):
+        calls.append((low/(1+z),high/(1+z)))
+        return [dict(species='M',species_id=1,rest_GHz=f*(1+z),qns=str(i),Eu_K=10.,log10_A_s=-4.,filters=['extragalactic']) for i,f in enumerate([169.69,171.7])]
+    monkeypatch.setattr(conlines.core,'query_catalogue',query)
+    by_label(app.button,'Match features with live Splatalogue').click().run()
+    assert not app.exception
+    assert len(calls)==2
+    assert calls[0][0]<169.36 and calls[0][1]>170
+    assert calls[1][0]<171.36 and calls[1][1]>172
+    options=next(v for v in app.session_state['identifications']['matches'].values() if v)
+    assert any(e['SPW']=='second.fits' and e['Status']=='No ESPADA feature' for e in options[0]['evidence']['transitions'])

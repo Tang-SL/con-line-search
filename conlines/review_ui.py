@@ -7,6 +7,54 @@ import pandas as pd
 import streamlit as st
 from .plots import spectrum_plot
 from .solutions import digest,transition_key,suggest_assignments,make_solution,restore_solution
+from .measurements import matching_frequency
+from .core import C
+
+
+def evidence_panel(feature, chosen, members, loaded, extractions, ident):
+    st.markdown('**Evidence for this identification**')
+    measurement=feature.get('aperture_measurement',{})
+    if measurement.get('reliable'):
+        st.write(f"Aperture centroid: {measurement['frequency_GHz']:.7f} GHz · estimated error ±{measurement['centroid_error_kms']:.1f} km/s.")
+        if measurement.get('sigma_kms') is not None:
+            st.write(f"Aperture moment width σ: {measurement['sigma_kms']:.1f} ± {measurement['sigma_error_kms']:.1f} km/s.")
+    else:
+        st.info('Matching uses the ESPADA centroid because an aperture centroid could not be measured reliably. '+ '; '.join(measurement.get('flags',[])))
+    st.caption('Moments use the original detection interval and both local baselines, preserving emission and absorption signs. Widths can be truncated by that interval or affected by blends. Errors are conditional estimates from noise controls and baseline changes; they exclude reference-frame/redshift uncertainty.')
+    if chosen is None:
+        st.caption('Choose a candidate to inspect its catalogue and companion-transition evidence.')
+        return
+    st.write(f"Velocity offset: {chosen['velocity_offset_kms']:+.1f} km/s relative to the entered systemic redshift.")
+    st.caption(f"Catalogue: {chosen.get('catalogue') or 'not supplied'} · Species entry: {chosen.get('species_id') or 'not supplied'} · Upper energy: {chosen.get('Eu_K')} K · log₁₀ A: {chosen.get('log10_A_s')}. Energy and Einstein A alone do not predict observed brightness.")
+    # Evidence is only taken from the current successful live request, never
+    # from an assignment restored from a saved solution.
+    fresh=next((r for r in members if transition_key(r)==transition_key(chosen)),None)
+    evidence=fresh.get('evidence') if fresh else None
+    if evidence is None:
+        st.info('No current live companion evidence for this choice. Fetch live matches; saved assignments remain available.')
+        return
+    ns=len(evidence['other_significant_features']);np_=len(evidence['other_provisional_features'])
+    st.write(f"Other compatible features: **{ns} significant**, **{np_} provisional**.")
+    st.caption(f"Same catalogue species entry and line sign, within ±{evidence['velocity_tolerance_kms']:g} km/s of this candidate's velocity offset. Counts use distinct features, not the number of catalogue rows in a blend. Chance coincidences remain possible; this is not a probability or excitation fit.")
+    if evidence['unavailable_spws']:
+        st.warning('Live catalogue evidence unavailable for: '+', '.join(evidence['unavailable_spws']))
+    entries=evidence['transitions']
+    if entries:
+        table=pd.DataFrame(entries).drop(columns=['dataset_key'])
+        st.dataframe(table,hide_index=True,width='stretch')
+        st.caption('“No ESPADA feature” is not an exclusion: a transition may be weak, blended or below the detection threshold. This inventory includes only transitions passing the current catalogue filters. Cross-SPW checks require linked apertures and matching known reference frames; line fluxes are not compared.')
+        with st.expander('Inspect a predicted transition in its spectrum'):
+            index=st.selectbox('Predicted transition',range(len(entries)),format_func=lambda i:f"{entries[i]['SPW']} · {entries[i]['Rest_GHz']:.7f} GHz · {entries[i]['Transition']} · {entries[i]['Status']}",key='companion_'+ident)
+            entry=entries[index];key=entry['dataset_key']
+            if entry['Status']=='Frame comparison unavailable':
+                st.info('Align the spectral reference frames before comparing this predicted position.')
+            elif key in extractions:
+                cube=loaded[key]['cube'];expected=entry['Expected_GHz']
+                fig=spectrum_plot(cube,extractions[key])
+                pad=max(expected*300/C,abs(cube.frequency[1]-cube.frequency[0])*5)
+                fig.update_xaxes(range=[expected-pad,expected+pad])
+                fig.add_vline(x=expected,line_color='#7356ad',line_dash='dash',annotation_text='At candidate velocity')
+                st.plotly_chart(fig,width='stretch',key='companionplot_'+ident)
 
 
 def identification_review(lookup,matches,context,feature_keys,loaded,extractions,intervals,provenance,revision,solution_dir):
@@ -18,6 +66,10 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
         state['assignments']=suggest_assignments(ids,matches,state['assignments'])
         state.update(revision=revision,provenance=provenance,widget_revision=state['widget_revision']+1)
     assignments=state['assignments']
+    for ident,(k,q) in lookup.items():
+        line=assignments[ident]['transition']
+        if line is not None:
+            line['velocity_offset_kms']=float(C*(1-matching_frequency(q)/(line['rest_GHz']/(1+context['redshift']))))
     if state['provenance']:
         st.caption('Assignment catalogue provenance: '+str(state['provenance'].get('queried_utc','saved solution'))+'. Reviewed choices are retained when live matches are refreshed.')
     st.caption('Nearest-frequency matches are tentative suggestions. Review them here without returning to Step 3. A question mark on the plot means the assignment has not been manually reviewed.')
@@ -38,7 +90,7 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
         ident=ids[cursor];k,q=lookup[ident];current=assignments[ident]
         with st.container(border=True):
             st.subheader(f'Feature {cursor+1} of {len(ids)} · {ident}')
-            st.write(f"{loaded[k]['name']} · {q['sign']} · {q['frequency_GHz']:.7f} GHz · "+('Significant' if q['significant'] else 'Provisional'))
+            st.write(f"{loaded[k]['name']} · {q['sign']} · {matching_frequency(q):.7f} GHz · "+('Significant' if q['significant'] else 'Provisional'))
             members=list(matches.get(ident,[]))
             if current['transition'] is not None and not any(transition_key(r)==transition_key(current['transition']) for r in members):
                 members.append(current['transition'])
@@ -54,9 +106,18 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
             if chosen:
                 fig.add_vline(x=chosen['rest_GHz']/(1+context['redshift']),line_color='#7356ad',line_dash='dash',annotation_text='Catalogue position',annotation_position='bottom right')
             st.plotly_chart(fig,width='stretch',key='reviewplot_'+ident)
+            evidence_panel(q,chosen,list(matches.get(ident,[])),loaded,extractions,ident)
             if members:
                 with st.expander(f'Compare {len(members)} possible transitions'):
-                    st.dataframe(pd.DataFrame(members)[[c for c in ['species','qns','rest_GHz','velocity_offset_kms','Eu_K','log10_A_s'] if c in members[0]]],hide_index=True,width='stretch')
+                    comparison=[]
+                    for member in members:
+                        row={c:member.get(c) for c in ['species','qns','rest_GHz','velocity_offset_kms','Eu_K','log10_A_s','catalogue']}
+                        fresh=next((r for r in matches.get(ident,[]) if transition_key(r)==transition_key(member)),{})
+                        ev=fresh.get('evidence')
+                        row['Other_significant_features']=len(ev['other_significant_features']) if ev else None
+                        row['Other_provisional_features']=len(ev['other_provisional_features']) if ev else None
+                        comparison.append(row)
+                    st.dataframe(pd.DataFrame(comparison),hide_index=True,width='stretch')
             def confirm():
                 value=st.session_state[choice_key]
                 assignments[ident]=dict(transition=members[value] if value>=0 else None,reviewed=True,origin='manual')
@@ -71,6 +132,11 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
     st.markdown('**Save or reuse an identification solution**')
     name=st.text_input('Solution name',value='IC 860 identification' if any('IC 860' in v['name'] for v in loaded.values()) else 'Line identification',max_chars=100,key='solution_name_'+scope)
     payload=make_solution(name,context,feature_keys,assignments,intervals,state['provenance'])
+    payload['measurement_method']='signed aperture moments v1'
+    for record,record_id in zip(payload['features'],feature_keys):
+        record['aperture_measurement']=lookup[record_id][1].get('aperture_measurement')
+    payload['evidence_snapshot']=dict(queried_utc=provenance.get('queried_utc') if provenance else None,
+                                    selected={feature_keys[ident]:next((r.get('evidence') for r in matches.get(ident,[]) if transition_key(r)==transition_key(a['transition'])),None) for ident,a in assignments.items()})
     data=json.dumps(payload,indent=2,allow_nan=False)
     a,b=st.columns(2)
     a.download_button('Download solution (JSON)',data,'identification_solution.json','application/json',key='download_solution_'+scope)

@@ -81,6 +81,7 @@ def run_espada(cube, widths=(3,5,9), mode='Both', clip=5., continuum_subtracted=
 
 
 def aperture_features(cube,extraction,result,threshold=8):
+    from .measurements import measure_feature
     features=[];selected=set(np.flatnonzero(extraction['mask']).tolist())
     for component in result['components']:
         if not selected.intersection(component['footprint']):continue
@@ -99,18 +100,20 @@ def aperture_features(cube,extraction,result,threshold=8):
         if np.any(extraction['noise'][q['lo']:q['hi']+1]>3*np.median(extraction['noise'])):flags.append('high channel noise')
         q.update(snr=score,models=models,variation=variation,flags=flags,
                  significant=score is not None and score>=threshold and not flags,matches=[])
+        q['aperture_measurement']=measure_feature(cube,extraction,q)
         features.append(q)
     return sorted(features,key=lambda q:q['frequency_GHz'])
 
 
 def match_features(features,rows,z,tolerance):
     """Match measured centroids, never overlapping detection search windows."""
+    from .measurements import matching_frequency
     matches={}
     for feature in features:
         found=[]
         for row in rows:
             expected=row['rest_GHz']/(1+z)
-            offset=C*(expected-feature['frequency_GHz'])/expected
+            offset=C*(expected-matching_frequency(feature))/expected
             if abs(offset)<=tolerance:
                 found.append(dict(row,expected_GHz=expected,velocity_offset_kms=float(offset)))
         matches[feature['id']]=sorted(found,key=lambda r:abs(r['velocity_offset_kms']))
