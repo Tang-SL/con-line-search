@@ -44,9 +44,43 @@ def test_detection_without_catalogue_and_unidentified_export(workbench):
     original_signature=app.session_state['analysis']['signature']
     by_label(app.slider,'Aperture preview zoom').set_value(5.).run()
     assert app.session_state['analysis']['signature']==original_signature
+    detection=app.session_state['detection']
     by_label(app.number_input,'Radius / half-width (arcsec)').set_value(.04).run()
-    assert any('Inputs or detection settings changed' in s.value for s in app.info)
+    # Moving or resizing the aperture re-screens features without a new detection run.
+    assert not app.exception and app.session_state['detection']==detection
+    assert app.session_state['analysis']['signature']!=original_signature
+    assert app.session_state['analysis']['detection_signature']==detection['signature']
+    assert not any('Rerun detection' in s.value for s in app.info)
+    assert [q['id'] for q in next(iter(app.session_state['analysis']['results'].values()))]==[first,'Cube1-F002']
+    # Changing a finder setting does invalidate the detection.
+    by_label(app.number_input,'ESPADA voxel threshold (σ)').set_value(6.).run()
+    assert any('Rerun detection' in s.value for s in app.info)
     assert not any(b.label=='Generate maps & download bundle' for b in app.button)
+
+
+def test_detection_comes_before_aperture_and_runs_once(tmp_path,monkeypatch):
+    import conlines.espada_backend
+    c=synthetic();path=tmp_path/'cube.fits';fits.writeto(path,c.data,c.header)
+    calls=[]
+    components=[dict(sofia_id=1,sign='Absorption',lo=29,hi=33,x=40.,y=40.,frequency_GHz=float(c.frequency[31]),footprint=[40*81+40]),
+                dict(sofia_id=2,sign='Absorption',lo=29,hi=33,x=10.,y=12.,frequency_GHz=float(c.frequency[31]),footprint=[12*81+10])]
+    def run(*a,**kw):
+        calls.append(1);return dict(components=components,status={},parameters={},console_log='fixture')
+    monkeypatch.setattr(conlines.espada_backend,'run_espada',run)
+    app=AppTest.from_file(str(ROOT/'app.py'),default_timeout=60).run()
+    app.radio[0].set_value('Local file paths').run()
+    app.text_area[0].set_value(str(path)).run()
+    assert any('Run detection to continue' in s.value for s in app.info)
+    assert not any(n.label=='Radius / half-width (arcsec)' for n in app.number_input)
+    by_label(app.button,'Run detection across all loaded SPWs').click().run()
+    assert not app.exception and len(calls)==1
+    assert [c['id'] for c in app.session_state['detection']['runs'][next(iter(app.session_state['detection']['runs']))]['components']]==['Cube1-F001','Cube1-F002']
+    assert [q['id'] for q in next(iter(app.session_state['analysis']['results'].values()))]==['Cube1-F001']
+    # Centre the aperture on the off-centre component: only it is screened, with its original ID.
+    by_label(app.radio,'Centre').set_value('Detected component').run()
+    by_label(app.selectbox,'Centre on component').set_value(1).run()
+    assert not app.exception and len(calls)==1
+    assert [q['id'] for q in next(iter(app.session_state['analysis']['results'].values()))]==['Cube1-F002']
 
 
 def test_catalogue_failure_preserves_detections(workbench,monkeypatch):
@@ -59,7 +93,8 @@ def test_catalogue_failure_preserves_detections(workbench,monkeypatch):
     by_label(app.button,'Match features with live Splatalogue').click().run()
     assert not app.exception and app.session_state['analysis']==original
     assert 'offline test' in app.session_state['identifications']['status'][0]['Status']
-    assert app.session_state['identifications']['matches']=={}
+    assert app.session_state['identifications']['selected']=={}
+    assert app.session_state['identification_matches']=={}
 
 
 def test_batch_suggestions_sequential_review_save_load_and_maps(workbench,monkeypatch):
@@ -135,5 +170,27 @@ def test_full_coverage_query_includes_spw_without_features(workbench,monkeypatch
     assert len(calls)==2
     assert calls[0][0]<169.36 and calls[0][1]>170
     assert calls[1][0]<171.36 and calls[1][1]>172
-    options=next(v for v in app.session_state['identifications']['matches'].values() if v)
+    options=next(v for v in app.session_state['identification_matches'].values() if v)
     assert any(e['SPW']=='second.fits' and e['Status']=='No ESPADA feature' for e in options[0]['evidence']['transitions'])
+
+
+def test_reviewed_choices_and_catalogue_survive_aperture_change(workbench,monkeypatch):
+    import conlines.core
+    app,_=workbench;features=next(iter(app.session_state['analysis']['results'].values()))
+    z=by_label(app.number_input,'Redshift z').value
+    calls=[]
+    def query(*a):
+        calls.append(a);return [dict(species=f'Molecule {i}',rest_GHz=f['frequency_GHz']*(1+z),qns='J=1-0',Eu_K=10.,log10_A_s=-4.,filters=['extragalactic']) for i,f in enumerate(features)]
+    monkeypatch.setattr(conlines.core,'query_catalogue',query)
+    by_label(app.button,'Match features with live Splatalogue').click().run()
+    by_label(app.button,'Review identifications one by one').click().run()
+    by_label(app.selectbox,'Identification choice').set_value(-1).run()
+    by_label(app.button,'Confirm & next').click().run()
+    assert not app.exception and len(calls)==1
+    by_label(app.number_input,'Radius / half-width (arcsec)').set_value(.03).run()
+    assert not app.exception
+    assert len(calls)==1 and app.session_state['identifications'] is not None
+    assert app.session_state['identification_matches'][features[1]['id']][0]['species']=='Molecule 1'
+    by_label(app.button,'Review identifications one by one').click().run()
+    # The reviewed "unidentified" choice is kept; it is not replaced by the nearest suggestion.
+    assert by_label(app.selectbox,'Identification choice').value==-1

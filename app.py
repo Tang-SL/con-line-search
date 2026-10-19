@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 import streamlit as st
+import plotly.graph_objects as go
 from conlines.espada_backend import run_espada, aperture_features, match_features
 from conlines.plots import chart_image, spectrum_plot
 from conlines.solutions import cube_fingerprint, feature_fingerprint, digest
@@ -19,7 +20,7 @@ st.set_page_config(page_title='CON Line Search',page_icon='🔭',layout='wide')
 st.markdown('''<style>.block-container{max-width:1450px;padding-top:2rem}h1{letter-spacing:-.04em} [data-testid="stMetric"]{background:#eaf0f5;padding:16px;border-radius:12px}</style>''',unsafe_allow_html=True)
 st.caption('CON LINE SEARCH  /  SPECTRAL WORKBENCH')
 st.title('From a cube to an adopted line')
-st.write('Extract comparable apertures across spectral windows, detect emission and absorption with ESPADA, identify features with live Splatalogue, and export signed integrated maps.')
+st.write('Detect emission and absorption in full cubes with ESPADA, screen the detections in comparable apertures across spectral windows, identify features with live Splatalogue, and export signed integrated maps.')
 
 @st.cache_resource(max_entries=8)
 def load_path(path,mtime):return read_cube(path)
@@ -38,6 +39,10 @@ def identify_cube(key,_cube):
 
 @st.cache_data(max_entries=32,show_spinner=False)
 def measure(key,config,_cube):return extract(_cube,**config)
+@st.cache_data(max_entries=64,show_spinner=False)
+def screen_features(key,spw,_cube,_extraction,_run,threshold):
+    # key covers the cubes, aperture and detection settings; aperture-only work, never a new ESPADA run.
+    return aperture_features(_cube,_extraction,_run,threshold)
 @st.cache_data(max_entries=8,show_spinner=False)
 def preview_image(key,_cube):return np.nanmedian(_cube.data,axis=0)
 
@@ -104,7 +109,45 @@ if not np.allclose(beams,beams[0],rtol=.01):st.warning('SPWs have different beam
 frames={v['cube'].frame for v in loaded.values()}
 if len(frames)>1 or 'UNKNOWN' in frames:st.warning('Reference frames differ or are unknown. No frame conversion or spectral stacking is performed. Check frames before interpreting velocity matches.')
 
-st.subheader('2 · Choose an aperture and extract')
+st.subheader('2 · Detect features with ESPADA')
+st.caption('ESPADA/SoFiA searches each full 3D cube for emission and absorption. No aperture, redshift or line catalogue is involved, so detection runs once per cube and settings: choosing or moving an aperture later never reruns it.')
+detection_settings=dict(engine='espada-v2-fullfield',threshold=threshold,widths=sorted(widths),mode=mode,clip=clip,continuum_subtracted=continuum_subtracted)
+finder_settings={name:value for name,value in detection_settings.items() if name!='threshold'}
+detection_signature=digest(dict(datasets=[loaded[k]['fingerprint'] for k in loaded],bindings=list(loaded),settings=finder_settings))
+def component_prefix(k,i):return 'SPW'+k.removeprefix('example') if k.startswith('example') else f'Cube{i+1}'
+if st.button('Run detection across all loaded SPWs',type='primary',disabled=not widths):
+    runs={};status=[]
+    for i,(k,v) in enumerate(loaded.items()):
+        try:
+            with st.spinner(f"Running ESPADA on {v['name']}…"):
+                run=search_cube(v['fingerprint'],tuple(widths),mode,clip,continuum_subtracted,v['cube'])
+            # IDs belong to the cube's detections, so they stay fixed when the aperture moves.
+            ordered=sorted(run['components'],key=lambda c:(c['frequency_GHz'],c['sign']))
+            runs[k]=dict(run,components=[dict(c,id=f'{component_prefix(k,i)}-F{n+1:03}') for n,c in enumerate(ordered)])
+            status.append(dict(SPW=v['name'],Components=len(ordered),Status='Completed'))
+        except Exception as e:status.append(dict(SPW=v['name'],Components=None,Status=str(e)))
+    st.session_state['detection']=dict(signature=detection_signature,runs=runs,status=status)
+detection=st.session_state.get('detection')
+if not detection or detection['signature']!=detection_signature:
+    st.info('Cubes or detection settings changed. Rerun detection to continue.' if detection else 'Run detection to continue. The aperture is chosen after detection.')
+    st.stop()
+st.dataframe(pd.DataFrame(detection['status']),hide_index=True,width='stretch')
+for n,(k,run) in enumerate(detection['runs'].items()):
+    components=run['components']
+    with st.expander(f"{loaded[k]['name']} · {len(components)} ESPADA components in the full field",expanded=n==0):
+        if not components:
+            st.info('No components detected in this cube.');continue
+        fig=chart_image(preview_image(loaded[k]['fingerprint'],loaded[k]['cube']),'Detected components on the median-channel image')
+        for sign,color,symbol in [('Absorption','#00c2ff','circle-open'),('Emission','#ff4d6d','diamond-open')]:
+            points=[c for c in components if c['sign']==sign]
+            if points:fig.add_trace(go.Scatter(x=[c['x'] for c in points],y=[c['y'] for c in points],mode='markers+text',text=[c['id'].rsplit('-',1)[-1] for c in points],textposition='top center',marker=dict(size=14,color=color,symbol=symbol,line=dict(width=2.5)),textfont=dict(color=color,size=11),name=sign,hovertemplate='%{text}<br>x %{x:.1f}, y %{y:.1f}<extra>'+sign+'</extra>'))
+        fig.update_layout(showlegend=True,legend=dict(orientation='h',y=-.15,x=0))
+        col1,col2=st.columns([1,1.2])
+        col1.plotly_chart(fig,width='stretch',key='detection_map_'+k)
+        col2.dataframe(pd.DataFrame([dict(ID=c['id'],Sign=c['sign'],ESPADA_GHz=round(c['frequency_GHz'],6),x=round(c['x'],1),y=round(c['y'],1),Channels=f"{c['lo']}–{c['hi']}") for c in components]),hide_index=True,width='stretch',height=min(430,38+35*len(components)))
+all_components=[(k,c) for k,run in detection['runs'].items() for c in run['components']]
+
+st.subheader('3 · Choose an aperture and screen features')
 keys=list(loaded);reference=st.selectbox('Reference SPW',keys,format_func=lambda k:loaded[k]['name']);ref=loaded[reference]['cube']
 a,b,c,d=st.columns(4)
 with a:shape=st.selectbox('Aperture',['Circle','Ellipse','Rectangle','Single pixel'])
@@ -112,13 +155,18 @@ with b:radius=st.number_input('Radius / half-width (arcsec)',min_value=.0001,val
 with c:ratio=st.number_input('Minor / major ratio',.1,1.,1.,step=.1,disabled=shape in ['Circle','Single pixel'])
 with d:angle=st.number_input('Angle from image x axis (deg)',-180.,180.,0.,step=5.,disabled=shape in ['Circle','Single pixel'])
 if shape in ['Circle','Single pixel']:ratio=1.;angle=0.
-centre_options=(['Continuum peak (example)'] if 'NUCX' in ref.header else [])+['Image centre','Brightness peak','Custom pixel position']
+centre_options=(['Continuum peak (example)'] if 'NUCX' in ref.header else [])+['Image centre','Brightness peak']+(['Detected component'] if all_components else [])+['Custom pixel position']
 center_mode=st.radio('Centre',centre_options,horizontal=True)
 preview=preview_image(loaded[reference]['fingerprint'],ref)
 if center_mode=='Continuum peak (example)':y0,x0=ref.header['NUCY'],ref.header['NUCX']
 elif center_mode=='Brightness peak':
     # Useful for continuum cubes; inspect the preview for continuum-subtracted inputs.
     y0,x0=np.unravel_index(np.nanargmax(abs(preview)),preview.shape)
+elif center_mode=='Detected component':
+    pick=st.selectbox('Centre on component',range(len(all_components)),format_func=lambda i:f"{all_components[i][1]['id']} · {all_components[i][1]['sign']} · {all_components[i][1]['frequency_GHz']:.6f} GHz")
+    source_key,component=all_components[pick]
+    world=WCS(loaded[source_key]['cube'].header).celestial.pixel_to_world(component['x'],component['y'])
+    x0,y0=(float(v) for v in WCS(ref.header).celestial.world_to_pixel(world))
 else:y0,x0=(np.array(ref.data.shape[1:])-1)/2
 if center_mode=='Custom pixel position':
     a,b=st.columns(2);x0=a.number_input('Centre x (zero-based)',0.,float(ref.data.shape[2]-1),float(x0));y0=b.number_input('Centre y (zero-based)',0.,float(ref.data.shape[1]-1),float(y0))
@@ -144,30 +192,21 @@ for k,v in loaded.items():
             st.download_button('Download extracted spectrum',csv,file_name=f'spectrum_{k[:12]}.csv',key=k+'csv')
     except ValueError as e:st.error(f"{v['name']}: {e}")
 
-st.subheader('3 · Detect and review features with ESPADA')
-st.caption('ESPADA/SoFiA searches the 3D cube without a line catalogue. Components intersecting your aperture are screened using its extracted spectrum and spatial noise controls. Green features pass the integrated S/N and baseline checks; amber features require review. Neither threshold is a search-wide false-alarm probability.')
-detection_settings=dict(engine='espada-v2-fullfield',threshold=threshold,widths=sorted(widths),mode=mode,clip=clip,continuum_subtracted=continuum_subtracted)
+st.markdown('**Features in this aperture**')
+st.caption('ESPADA components whose 3D masks intersect your aperture are screened automatically using its extracted spectrum and spatial noise controls; moving the aperture updates this table without rerunning detection. Green features pass the integrated S/N and baseline checks; others are provisional and need review. Neither threshold is a search-wide false-alarm probability.')
 detection_context=dict(datasets=sorted([dict(fingerprint=v['fingerprint'],aperture={name:round(value,8) if isinstance(value,float) else value for name,value in configs[k].items()}) for k,v in loaded.items()],key=lambda v:v['fingerprint']),settings=detection_settings)
 signature=digest(dict(context=detection_context,bindings=list(loaded),measurement_version=1))
-if st.button('Run detection across all loaded SPWs',type='primary',disabled=not extractions or not widths):
-    results={};status=[];runs={}
-    for i,(k,ex) in enumerate(extractions.items()):
-        try:
-            with st.spinner(f"Running ESPADA on {loaded[k]['name']}…"):
-                run=search_cube(loaded[k]['fingerprint'],tuple(widths),mode,clip,continuum_subtracted,loaded[k]['cube'])
-                found=aperture_features(loaded[k]['cube'],ex,run,threshold)
-                prefix='SPW'+k.removeprefix('example') if k.startswith('example') else f'Cube{i+1}'
-                for n,q in enumerate(found):q['id']=f'{prefix}-F{n+1:03}'
-                results[k]=found;runs[k]={name:value for name,value in run.items() if name!='components'}
-                status.append(dict(SPW=loaded[k]['name'],Components=len(run['components']),Aperture_features=len(found),Significant=sum(q['significant'] for q in found),Status='Completed'))
-        except Exception as e:status.append(dict(SPW=loaded[k]['name'],Status=str(e)))
-    st.session_state['analysis']=dict(signature=signature,results=results,status=status,runs=runs)
-    st.session_state.pop('identifications',None)
-analysis=st.session_state.get('analysis')
-if not analysis or analysis['signature']!=signature:
-    if analysis:st.info('Inputs or detection settings changed. Rerun detection before adopting features or making maps.')
-    st.stop()
-st.dataframe(pd.DataFrame(analysis['status']),hide_index=True,width='stretch')
+results={};status=[]
+for k,ex in extractions.items():
+    run=detection['runs'].get(k)
+    if run is None:continue
+    found=screen_features(signature,k,loaded[k]['cube'],ex,run,threshold)
+    results[k]=found
+    status.append(dict(SPW=loaded[k]['name'],Components=len(run['components']),Aperture_features=len(found),Significant=sum(q['significant'] for q in found)))
+analysis=dict(signature=signature,detection_signature=detection_signature,results=results,status=status,
+              runs={k:{name:value for name,value in run.items() if name!='components'} for k,run in detection['runs'].items()})
+st.session_state['analysis']=analysis
+st.dataframe(pd.DataFrame(status),hide_index=True,width='stretch')
 rows=[];lookup={}
 for k,features in analysis['results'].items():
     for q in features:
@@ -191,27 +230,35 @@ k,q=lookup[inspect];st.plotly_chart(spectrum_plot(loaded[k]['cube'],extractions[
 st.subheader('4 · Identify features with live Splatalogue')
 st.caption('Matches use aperture centroids where measurable and remain sorted by absolute velocity offset. The evidence panel checks other transitions across the full loaded SPW coverage. Frequency compatibility and manual review do not establish a molecular identification.')
 include_provisional=st.checkbox('Also match provisional features',True)
-match_settings=dict(detection=signature,z=z,tolerance=halfwidth,filters=selected_filters,energy=energy,exclude=exclude,min_log_a=min_log_a,exclude_multiple=exclude_multiple,exclude_excited=exclude_excited,include_provisional=include_provisional,companion_tolerance=companion_tolerance,linked_apertures=linked)
-match_signature=hashlib.sha256(json.dumps(match_settings,sort_keys=True).encode()).hexdigest()
+# The live query depends only on the cubes' frequency coverage and catalogue settings.
+# Matches are recomputed from that query for the current aperture features, so
+# moving the aperture never needs a new catalogue request.
+catalogue_settings=dict(datasets=sorted(v['fingerprint'] for v in loaded.values()),z=z,tolerance=halfwidth,filters=selected_filters,energy=energy,exclude=exclude,min_log_a=min_log_a,exclude_multiple=exclude_multiple,exclude_excited=exclude_excited)
+catalogue_signature=digest(catalogue_settings)
+match_settings=dict(catalogue_settings,detection=signature,include_provisional=include_provisional,companion_tolerance=companion_tolerance,linked_apertures=linked)
 if st.button('Match features with live Splatalogue',disabled=not selected_filters):
-    matches={};audits={};catalogues={};selected_catalogues={};query_status=[]
+    audits={};catalogues={};selected_catalogues={};query_status=[]
     for k,item in loaded.items():
-        features=analysis['results'].get(k,[])
-        targets=[q for q in features if q['significant'] or include_provisional]
         low=float(min(item['cube'].frequency));high=float(max(item['cube'].frequency))
         try:
             with st.spinner(f"Fetching live Splatalogue for {loaded[k]['name']}…"):
                 raw=query_catalogue(low*(1+z)/(1+halfwidth/C),high*(1+z)/(1-halfwidth/C),selected_filters)
                 selected,audit=select_priors(raw,low,high,z,halfwidth,energy,selected_filters,exclude,min_log_a,exclude_multiple,exclude_excited,return_audit=True)
-                matches.update(match_features(targets,selected,z,halfwidth));audits[k]=audit;catalogues[k]=raw;selected_catalogues[k]=selected
+                audits[k]=audit;catalogues[k]=raw;selected_catalogues[k]=selected
                 query_status.append(dict(SPW=loaded[k]['name'],Status='Live query completed',Transitions=len(selected)))
         except Exception as e:query_status.append(dict(SPW=loaded[k]['name'],Status=f'Live query failed: {e}'))
-    matches=add_evidence(matches,lookup,selected_catalogues,loaded,z,companion_tolerance,linked,analysis['results'])
-    st.session_state['identifications']=dict(signature=match_signature,matches=matches,audits=audits,catalogues=catalogues,status=query_status,queried_utc=datetime.now(timezone.utc).isoformat(),settings=match_settings)
+    st.session_state['identifications']=dict(signature=catalogue_signature,audits=audits,catalogues=catalogues,selected=selected_catalogues,status=query_status,queried_utc=datetime.now(timezone.utc).isoformat(),settings=catalogue_settings)
 identifications=st.session_state.get('identifications')
-if identifications and identifications['signature']!=match_signature:
+if identifications and identifications['signature']!=catalogue_signature:
     st.info('Identification settings changed. Fetch live matches again. Feature detections remain valid.');identifications=None
-matches=identifications['matches'] if identifications else {}
+matches={}
+if identifications:
+    for k,features in analysis['results'].items():
+        if k not in identifications['selected']:continue
+        targets=[q for q in features if q['significant'] or include_provisional]
+        matches.update(match_features(targets,identifications['selected'][k],z,halfwidth))
+    matches=add_evidence(matches,lookup,identifications['selected'],loaded,z,companion_tolerance,linked,analysis['results'])
+st.session_state['identification_matches']=matches
 if identifications:
     st.caption('Live query time: '+identifications['queried_utc'])
     if identifications['status']:st.dataframe(pd.DataFrame(identifications['status']),hide_index=True,width='stretch')
@@ -230,7 +277,7 @@ baseline=st.selectbox('Map baseline subtraction',['linear','constant','none'],he
 choices={ident:assignments[ident]['transition'] for ident in adopted_ids}
 st.caption('Maps use the assignments from Step 4. Automatic suggestions remain tentative until reviewed; unidentified features can still be mapped.')
 if st.button('Generate maps & download bundle',type='primary'):
-    output=io.BytesIO();manifest=dict(detection=analysis,identifications=identifications,solution=solution,apertures=configs,map_preview_zoom=map_zoom,lines=[])
+    output=io.BytesIO();manifest=dict(detection=analysis,identifications=dict(identifications,matches=matches,settings=match_settings) if identifications else None,solution=solution,apertures=configs,map_preview_zoom=map_zoom,lines=[])
     with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
         for _,r in adopted.iterrows():
             k,q=lookup[r.ID];cube=loaded[k]['cube'];line=choices[r.ID]

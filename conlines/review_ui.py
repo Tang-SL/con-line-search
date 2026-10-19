@@ -1,5 +1,6 @@
 """Step 4: batch suggestions, sequential manual review and reusable solutions."""
 from pathlib import Path
+import copy
 import json
 import re
 import uuid
@@ -59,8 +60,12 @@ def evidence_panel(feature, chosen, members, loaded, extractions, ident):
 
 def identification_review(lookup,matches,context,feature_keys,loaded,extractions,intervals,provenance,revision,solution_dir):
     scope=digest(dict(context=context,feature_keys=feature_keys));state_key='solution_'+scope;ids=list(lookup)
+    # Reviewed choices belong to a detected component (its feature key), not to an
+    # aperture, so they carry over when the aperture or redshift changes.
+    store=st.session_state.setdefault('assignments_by_feature',{})
     if state_key not in st.session_state:
-        st.session_state[state_key]=dict(assignments=suggest_assignments(ids,{}),cursor=None,revision=None,widget_revision=0,provenance=None)
+        carried={ident:store[feature_keys[ident]] for ident in ids if feature_keys[ident] in store}
+        st.session_state[state_key]=dict(assignments=suggest_assignments(ids,{},carried),cursor=None,revision=None,widget_revision=0,provenance=None)
     state=st.session_state[state_key]
     if revision and revision!=state['revision']:
         state['assignments']=suggest_assignments(ids,matches,state['assignments'])
@@ -145,7 +150,7 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
         slug=re.sub('[^a-zA-Z0-9_-]+','-',name).strip('-')[:60] or 'solution'
         path=folder/f'{slug}-{uuid.uuid4().hex[:8]}.json';path.write_text(data)
         st.success(f'Saved {path.name}')
-    st.caption('Solutions store assignments, review status, integration channels and analysis settings. Reload them with the same cubes, aperture, redshift and detection settings. Reusing assignments does not query a cached catalogue; new candidate searches always use live Splatalogue.')
+    st.caption('Solutions store assignments, review status, integration channels and analysis settings. Reload them with the same cubes, aperture, redshift and detection settings. Within a session, reviewed choices follow each detected component when you move the aperture. Reusing assignments does not query a cached catalogue; new candidate searches always use live Splatalogue.')
     with st.expander('Load a saved solution'):
         saved=sorted(Path(solution_dir).glob('*.json'),key=lambda p:p.stat().st_mtime,reverse=True)
         chosen_file=st.selectbox('Locally saved solutions',saved,format_func=lambda p:p.name,key='saved_solution_'+scope) if saved else None
@@ -164,4 +169,6 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
             except (ValueError,TypeError,KeyError,OSError) as e:st.error(f'Could not load solution: {e}')
     notice=st.session_state.get('solution_notice_'+scope)
     if notice:st.info(notice)
+    # Distinct names: the confirm callback above reads `ident` when it runs.
+    for feature_id,choice_record in assignments.items():store[feature_keys[feature_id]]=copy.deepcopy(choice_record)
     return assignments,payload

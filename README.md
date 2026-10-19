@@ -123,21 +123,30 @@ ESPADA/SoFiA 3D finder first, followed by **live Splatalogue only** for identifi
 Archived catalogue snapshots remain solely for reproducing the historical pilot.
 
 1. Upload multiple FITS cubes, supply local paths, or select the IC 860 full-field examples.
-2. Choose a circle, ellipse, rectangle or single pixel and inspect the extracted
+2. Run ESPADA on each full cube, independently of any aperture, redshift or
+   molecular catalogue. Both emission and absorption are enabled by default.
+   Every component in the field is shown on a map and in a table, with a feature
+   ID that belongs to the cube's detection (for example `SPW0-F003`) and stays
+   fixed when the aperture changes. Detection reruns only when the cubes or the
+   finder settings (voxel threshold, trial widths, mode, continuum flag) change.
+3. Choose a circle, ellipse, rectangle or single pixel and inspect the extracted
    aperture-mean spectra and spatial noise controls. Default radius is one beam
-   major-axis FWHM. Shared sky positions are projected onto each SPW separately.
-   The example defaults to the continuum nucleus position. Step 2 has a 3× preview
+   major-axis FWHM. The centre can also be set on any detected component.
+   Shared sky positions are projected onto each SPW separately.
+   The example defaults to the continuum nucleus position. Step 3 has a 3× preview
    zoom; extraction and noise estimation always use the full loaded field. Controls
    are integer-pixel translations of the exact source stencil, avoiding boundary
    round-off changing their pixel counts. Set zoom to 1 to inspect the full field.
-3. Run ESPADA on each cube, independently of redshift and molecular catalogues.
-   Both emission and absorption are enabled by default. Components whose masks
-   intersect the aperture are listed with short feature IDs. All are labelled
-   on the spectrum; green features pass the additional aperture significance screen.
+   Components whose masks intersect the aperture are screened automatically: all
+   are labelled on the spectrum, and green features pass the additional aperture
+   significance screen. Moving the aperture re-screens without rerunning ESPADA.
 4. Fetch live Splatalogue matches for all detected features by default (uncheck the provisional
    option to restrict to significant ones). Every explicit matching request fetches fresh data. Network failure
    leaves detections available without substituting a saved catalogue. Changing
    catalogue filters or redshift does not invalidate detection or its significance.
+   Moving the aperture does not need a new query: matches and companion evidence
+   are recomputed from the same live response for the new aperture features.
+   Reviewed choices follow each detected component within a session.
    Queries now cover each loaded SPW's full frequency range, including SPWs with
    no detections. Species IDs, catalogue names, lower energies and the original
    frequency text are retained alongside the existing transition metadata.
@@ -145,7 +154,7 @@ Archived catalogue snapshots remain solely for reproducing the historical pilot.
    the adjustable default ±200 km/s tolerance. The overview table and spectrum
    label these **tentative** suggestions. Use **Review identifications one by one**
    to choose a transition or leave a feature unidentified, then **Confirm & next**.
-   This panel has its own spectrum and does not depend on Step 3's inspector.
+   This panel has its own spectrum and does not depend on the Step 3 inspector.
    Reviewed choices survive catalogue refreshes; a choice absent from the current
    filtered catalogue is kept and identified as such in the review panel.
    The **Evidence for this identification** panel shows the aperture centroid,
@@ -207,7 +216,7 @@ threshold; unsmoothed and 3/5/9-channel spectral kernels; unsmoothed and one-bea
 spatial kernels. Source linking retains the pilot's minimum sizes (5 pixels per
 spatial axis, 2 channels, 50 voxels). Thus spatially tiny sources can be missed.
 The continuum-subtracted checkbox defaults on; turn it off for SoFiA's linear
-continuum subtraction. Cached runs can be reused when only the aperture changes.
+continuum subtraction. Detection never depends on the aperture, so it is not rerun when only the aperture changes.
 
 Each overlapping component is independently assessed in the chosen aperture.
 Two local baseline estimates (constant with five sideband channels per side,
