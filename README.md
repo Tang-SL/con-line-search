@@ -110,6 +110,14 @@ python -m pip install -r requirements-ui.txt
 python -m streamlit run app.py
 ```
 
+On macOS, after installing `requirements-ui.txt` in `.venv`, you can also
+double-click **Start app.command**. It uses the project environment and, when
+present, `.local-tools/sofia` (otherwise configure SoFiA as above). Keep its
+terminal open while using the app. The address `http://127.0.0.1:8501` points to
+your own computer: it works only while the server is running. After quitting the
+server or restarting the computer, launch it again. Keep the environment and
+SoFiA executable in persistent folders rather than a temporary directory.
+
 Open http://127.0.0.1:8501. Cubes stay local. The interface now uses the real
 ESPADA/SoFiA 3D finder first, followed by **live Splatalogue only** for identification.
 Archived catalogue snapshots remain solely for reproducing the historical pilot.
