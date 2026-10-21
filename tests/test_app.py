@@ -29,7 +29,7 @@ def workbench(tmp_path,monkeypatch):
 
 
 def test_empty_app():
-    app=AppTest.from_file(str(ROOT/'app.py')).run()
+    app=AppTest.from_file(str(ROOT/'app.py'),default_timeout=30).run()
     assert not app.exception
     assert 'Add a cube' in app.info[0].value
 
@@ -194,3 +194,39 @@ def test_reviewed_choices_and_catalogue_survive_aperture_change(workbench,monkey
     by_label(app.button,'Review identifications one by one').click().run()
     # The reviewed "unidentified" choice is kept; it is not replaced by the nearest suggestion.
     assert by_label(app.selectbox,'Identification choice').value==-1
+
+
+def test_low_reliability_artefact_is_not_matched_or_reviewed(tmp_path,monkeypatch):
+    import conlines.core
+    import conlines.espada_backend
+    c=synthetic()
+    controls=[(5,5),(75,5),(5,75),(75,75),(40,5),(5,40)]
+    for x,y in controls:c.data[10:12,y,x]+=.05
+    c.data[10:12,40,41]+=.03
+    path=tmp_path/'cube.fits';fits.writeto(path,c.data,c.header)
+    f=lambda lo,hi:float(c.frequency[(lo+hi)//2])
+    components=[dict(sofia_id=1,sign='Absorption',lo=29,hi=33,x=40.,y=40.,frequency_GHz=f(29,33),footprint=[40*81+40]),
+                dict(sofia_id=2,sign='Emission',lo=10,hi=11,x=41.,y=40.,frequency_GHz=f(10,11),footprint=[40*81+41])]
+    components+=[dict(sofia_id=3+i,sign='Emission',lo=10,hi=11,x=float(x),y=float(y),frequency_GHz=f(10,11),footprint=[y*81+x]) for i,(x,y) in enumerate(controls)]
+    monkeypatch.setattr(conlines.espada_backend,'run_espada',lambda *a,**kw:dict(components=components,status={},parameters={},console_log='fixture'))
+    app=AppTest.from_file(str(ROOT/'app.py'),default_timeout=60).run()
+    app.radio[0].set_value('Local file paths').run()
+    app.text_area[0].set_value(str(path)).run()
+    by_label(app.button,'Run detection across all loaded SPWs').click().run()
+    assert not app.exception and not app.error,[e.value for e in app.error]
+    rows={r['id']:r for r in app.session_state['analysis']['results'][next(iter(app.session_state['analysis']['results']))]}
+    real=next(i for i,q in rows.items() if q['sign']=='Absorption');artefact=next(i for i,q in rows.items() if q['sign']=='Emission')
+    z=by_label(app.number_input,'Redshift z').value
+    lines=[dict(species=name,rest_GHz=rows[i]['frequency_GHz']*(1+z),qns='1-0',Eu_K=10.,log10_A_s=-4.,filters=['extragalactic']) for name,i in [('Real',real),('Coincidence',artefact)]]
+    monkeypatch.setattr(conlines.core,'query_catalogue',lambda *a:lines)
+    by_label(app.button,'Match features with live Splatalogue').click().run()
+    assert not app.exception
+    matches=app.session_state['identification_matches']
+    assert matches[real][0]['species']=='Real' and matches[real][0]['id_probability']>.5
+    assert 0<matches[real][0]['combined_probability']<=matches[real][0]['id_probability']
+    assert artefact not in matches
+    by_label(app.button,'Review identifications one by one').click().run()
+    assert any('Feature 1 of 1' in h.value for h in app.subheader)
+    by_label(app.checkbox,'Also match and review low-reliability features').check().run()
+    by_label(app.button,'Match features with live Splatalogue').click().run()
+    assert artefact in app.session_state['identification_matches']

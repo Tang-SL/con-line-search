@@ -232,6 +232,43 @@ completeness calibration, LTE modelling or abundance inference is claimed.
 Blends can contaminate sidebands and alter centroids. Identification requires
 checking other transitions and physically consistent excitation.
 
+### Detection reliability and identification probability
+
+Many ESPADA components are artefacts, and with a ±200 km/s window most of them
+still find a catalogue line by chance (about 92% at the IC 860 SPW0
+Extragalactic density of ~11 lines/GHz). The app therefore keeps two separate
+scores, defined in `conlines/reliability.py`.
+
+**Detection reliability (Step 3)** asks whether a component is real and never uses
+the catalogue. Components outside a source region (default: five beams around
+the aperture centre) are the artefact control sample. For each component inside,
+the app counts same-sign components that are at least as strong in both peak
+channel-integrated S/N (over the component's own SoFiA mask) and number of
+channels: inside the region, in a near control zone (up to 3× the radius) and in
+the far field. Each zone predicts how many such artefacts should fall inside the
+region by area; the larger prediction is used, so artefacts concentrated around a
+bright nucleus are not diluted by the far field. Reliability is
+1 − (84% Poisson upper limit of the prediction) / (observed number). Narrow,
+off-centre, isolated artefacts thus lower the reliability of similar components at
+the nucleus. Features below the chosen minimum (default 0.5) are not matched or put
+in the review queue unless you include them; they stay in the tables and can still
+be mapped. The number of neighbouring components within one beam is shown for
+context. Assumptions: artefacts are spread evenly within each control zone and
+real features outside the region are rare (both make the estimate cautious); it is
+not a calibrated false-alarm probability.
+
+**Identification probability (Step 4)** asks which transition a real feature is.
+For each catalogue candidate the weight is a Gaussian in velocity offset (mean and
+scatter σ set in Step 4, combined with the measured centroid error); an
+“unidentified” alternative has the weight of one line spread uniformly over the
+match window. Weights are normalised over candidates plus unidentified. Calibrate
+the mean and σ from reviewed, significant, reliable anchor lines (at least three)
+with **Use anchor calibration**. Combined = detection reliability × identification
+probability. Each feature also shows the chance-match probability: the probability
+that at least one unrelated catalogue line lies within ±2σ at the current catalogue
+density. Species priors, line-strength (LTE) companion predictions and width
+consistency are planned next; until then all candidates have equal prior weight.
+
 ### Catalogue filtering
 
 Default Extragalactic selection, Eu≤300 K, deuterated/trans species excluded,

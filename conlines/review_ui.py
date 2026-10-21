@@ -12,8 +12,15 @@ from .measurements import matching_frequency
 from .core import C
 
 
-def evidence_panel(feature, chosen, members, loaded, extractions, ident):
+def evidence_panel(feature, chosen, members, loaded, extractions, ident, score=None):
     st.markdown('**Evidence for this identification**')
+    score = score or {}
+    if score.get('reliability') is not None:
+        st.write(f"Detection reliability: **{score['reliability']:.2f}** (catalogue-independent; from the off-source artefact rate).")
+    elif score.get('region') == 'Control':
+        st.warning('This component lies outside the source region, where the app treats components as the artefact control sample.')
+    if score.get('chance') is not None:
+        st.caption(f"Chance that at least one unrelated catalogue line falls this close: {score['chance']:.0%}. Probability that the line is none of the listed transitions: {score.get('p_unidentified', 0):.0%}.")
     measurement=feature.get('aperture_measurement',{})
     if measurement.get('reliable'):
         st.write(f"Aperture centroid: {measurement['frequency_GHz']:.7f} GHz · estimated error ±{measurement['centroid_error_kms']:.1f} km/s.")
@@ -26,6 +33,10 @@ def evidence_panel(feature, chosen, members, loaded, extractions, ident):
         st.caption('Choose a candidate to inspect its catalogue and companion-transition evidence.')
         return
     st.write(f"Velocity offset: {chosen['velocity_offset_kms']:+.1f} km/s relative to the entered systemic redshift.")
+    fresh_row = next((r for r in members if transition_key(r) == transition_key(chosen)), {})
+    if fresh_row.get('id_probability') is not None:
+        combined = fresh_row.get('combined_probability')
+        st.write(f"Identification probability (if real): **{fresh_row['id_probability']:.2f}**"+(f" · combined with detection reliability: **{combined:.2f}**" if combined is not None else ''))
     st.caption(f"Catalogue: {chosen.get('catalogue') or 'not supplied'} · Species entry: {chosen.get('species_id') or 'not supplied'} · Upper energy: {chosen.get('Eu_K')} K · log₁₀ A: {chosen.get('log10_A_s')}. Energy and Einstein A alone do not predict observed brightness.")
     # Evidence is only taken from the current successful live request, never
     # from an assignment restored from a saved solution.
@@ -58,7 +69,8 @@ def evidence_panel(feature, chosen, members, loaded, extractions, ident):
                 st.plotly_chart(fig,width='stretch',key='companionplot_'+ident)
 
 
-def identification_review(lookup,matches,context,feature_keys,loaded,extractions,intervals,provenance,revision,solution_dir):
+def identification_review(lookup,matches,context,feature_keys,loaded,extractions,intervals,provenance,revision,solution_dir,scores=None,review_ids=None):
+    scores=scores or {}
     scope=digest(dict(context=context,feature_keys=feature_keys));state_key='solution_'+scope;ids=list(lookup)
     # Reviewed choices belong to a detected component (its feature key), not to an
     # aperture, so they carry over when the aperture or redshift changes.
@@ -78,23 +90,28 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
     if state['provenance']:
         st.caption('Assignment catalogue provenance: '+str(state['provenance'].get('queried_utc','saved solution'))+'. Reviewed choices are retained when live matches are refreshed.')
     st.caption('Nearest-frequency matches are tentative suggestions. Review them here without returning to Step 3. A question mark on the plot means the assignment has not been manually reviewed.')
+    queue=[i for i in ids if review_ids is None or i in set(review_ids)]
     summary=[]
     for ident,(k,q) in lookup.items():
         a=assignments[ident];line=a['transition']
-        summary.append(dict(Feature=ident,SPW=loaded[k]['name'],Sign=q['sign'],Significant=q['significant'],Assignment=line['species'] if line else 'Unidentified',Rest_GHz=line['rest_GHz'] if line else None,Offset_kms=line.get('velocity_offset_kms') if line else None,Review='Reviewed' if a['reviewed'] else 'Tentative'))
+        score=scores.get(ident,{})
+        fresh=next((r for r in matches.get(ident,[]) if line is not None and transition_key(r)==transition_key(line)),{})
+        probability=fresh.get('id_probability') if line is not None else (score.get('p_unidentified') if matches.get(ident) else None)
+        summary.append(dict(Feature=ident,SPW=loaded[k]['name'],Sign=q['sign'],Significant=q['significant'],Reliability=score.get('reliability'),Assignment=line['species'] if line else 'Unidentified',Rest_GHz=line['rest_GHz'] if line else None,Offset_kms=line.get('velocity_offset_kms') if line else None,P_assignment=probability,Combined=probability*score['reliability'] if probability is not None and score.get('reliability') is not None else None,Chance_match=score.get('chance'),Review='Reviewed' if a['reviewed'] else 'Tentative',In_review_queue=ident in queue))
     st.dataframe(pd.DataFrame(summary),hide_index=True,width='stretch')
-    reviewed=sum(a['reviewed'] for a in assignments.values())
-    st.progress(reviewed/len(ids),text=f'{reviewed} of {len(ids)} features manually reviewed')
+    reviewed=sum(assignments[i]['reviewed'] for i in queue)
+    if queue:st.progress(reviewed/len(queue),text=f'{reviewed} of {len(queue)} features in the review queue manually reviewed')
+    if len(queue)<len(ids):st.caption(f'{len(ids)-len(queue)} features below the detection-reliability cut are left out of the review queue; they stay in the table and can still be mapped.')
     show_spw=st.selectbox('SPW identification overview',list(dict.fromkeys(k for k,q in lookup.values())),format_func=lambda k:loaded[k]['name'],key='overview_'+scope)
     st.plotly_chart(spectrum_plot(loaded[show_spw]['cube'],extractions[show_spw],[q for k,q in lookup.values() if k==show_spw],assignments=assignments),width='stretch',key='assignplot_'+scope)
 
     def start_review():state['cursor']=0
     st.button('Review identifications one by one',on_click=start_review,key='start_'+scope)
     cursor=state['cursor']
-    if cursor is not None and cursor<len(ids):
-        ident=ids[cursor];k,q=lookup[ident];current=assignments[ident]
+    if cursor is not None and cursor<len(queue):
+        ident=queue[cursor];k,q=lookup[ident];current=assignments[ident]
         with st.container(border=True):
-            st.subheader(f'Feature {cursor+1} of {len(ids)} · {ident}')
+            st.subheader(f'Feature {cursor+1} of {len(queue)} · {ident}')
             st.write(f"{loaded[k]['name']} · {q['sign']} · {matching_frequency(q):.7f} GHz · "+('Significant' if q['significant'] else 'Provisional'))
             members=list(matches.get(ident,[]))
             if current['transition'] is not None and not any(transition_key(r)==transition_key(current['transition']) for r in members):
@@ -102,7 +119,7 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
                 st.caption('The saved/current assignment is retained below. Fetch live matches to compare against the current catalogue filters.')
             selected=next((j for j,r in enumerate(members) if transition_key(r)==transition_key(current['transition'])),-1)
             choice_key=f'choice_{scope}_{state["widget_revision"]}_{ident}'
-            choice=st.selectbox('Identification choice',[-1,*range(len(members))],index=selected+1,format_func=lambda j:'Unidentified / no reliable assignment' if j==-1 else f"{members[j]['species']} · {members[j]['rest_GHz']:.7f} GHz · Δv {members[j].get('velocity_offset_kms',0):+.1f} km/s · {members[j].get('qns','')}",key=choice_key)
+            choice=st.selectbox('Identification choice',[-1,*range(len(members))],index=selected+1,format_func=lambda j:('Unidentified / no reliable assignment'+(f" · P {scores[ident]['p_unidentified']:.2f}" if matches.get(ident) and scores.get(ident,{}).get('p_unidentified') is not None else '')) if j==-1 else f"{members[j]['species']} · {members[j]['rest_GHz']:.7f} GHz · Δv {members[j].get('velocity_offset_kms',0):+.1f} km/s · {members[j].get('qns','')}"+(f" · P {members[j]['id_probability']:.2f}" if members[j].get('id_probability') is not None and members[j] in matches.get(ident,[]) else ''),key=choice_key)
             chosen=members[choice] if choice>=0 else None
             fig=spectrum_plot(loaded[k]['cube'],extractions[k],[q],selected_id=ident)
             f=loaded[k]['cube'].frequency;left,right=sorted([f[q['lo']],f[q['hi']]])
@@ -111,7 +128,7 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
             if chosen:
                 fig.add_vline(x=chosen['rest_GHz']/(1+context['redshift']),line_color='#7356ad',line_dash='dash',annotation_text='Catalogue position',annotation_position='bottom right')
             st.plotly_chart(fig,width='stretch',key='reviewplot_'+ident)
-            evidence_panel(q,chosen,list(matches.get(ident,[])),loaded,extractions,ident)
+            evidence_panel(q,chosen,list(matches.get(ident,[])),loaded,extractions,ident,scores.get(ident))
             if members:
                 with st.expander(f'Compare {len(members)} possible transitions'):
                     comparison=[]
@@ -119,6 +136,7 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
                         row={c:member.get(c) for c in ['species','qns','rest_GHz','velocity_offset_kms','Eu_K','log10_A_s','catalogue']}
                         fresh=next((r for r in matches.get(ident,[]) if transition_key(r)==transition_key(member)),{})
                         ev=fresh.get('evidence')
+                        row['ID_probability']=fresh.get('id_probability');row['Combined']=fresh.get('combined_probability')
                         row['Other_significant_features']=len(ev['other_significant_features']) if ev else None
                         row['Other_provisional_features']=len(ev['other_provisional_features']) if ev else None
                         comparison.append(row)
@@ -130,7 +148,7 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
             def previous():state['cursor']=max(0,cursor-1)
             a,b=st.columns(2)
             a.button('Previous feature',disabled=cursor==0,on_click=previous,key='prev_'+scope)
-            b.button('Confirm & next' if cursor<len(ids)-1 else 'Confirm & finish',on_click=confirm,type='primary',key='confirm_'+scope)
+            b.button('Confirm & next' if cursor<len(queue)-1 else 'Confirm & finish',on_click=confirm,type='primary',key='confirm_'+scope)
     elif cursor is not None:
         st.success('Review complete. Your assignments are ready to save and use for maps.')
 

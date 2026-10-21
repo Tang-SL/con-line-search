@@ -12,6 +12,7 @@ from conlines.solutions import cube_fingerprint, feature_fingerprint, digest
 from conlines.review_ui import identification_review
 from conlines.measurements import matching_frequency
 from conlines.evidence import add_evidence
+from conlines.reliability import channel_noise,component_properties,detection_reliability,neighbour_counts,identification_probabilities,chance_match_probability,anchor_statistics
 from astropy.wcs import WCS
 from conlines.core import read_cube,extract,query_catalogue,select_priors,moment,fits_bytes,C
 
@@ -45,6 +46,15 @@ def screen_features(key,spw,_cube,_extraction,_run,threshold):
     return aperture_features(_cube,_extraction,_run,threshold)
 @st.cache_data(max_entries=8,show_spinner=False)
 def preview_image(key,_cube):return np.nanmedian(_cube.data,axis=0)
+@st.cache_data(max_entries=8,show_spinner=False)
+def cube_noise(key,_cube):return channel_noise(_cube)
+@st.cache_data(max_entries=16,show_spinner=False)
+def strengths(key,_cube,_components,_noise):return component_properties(_cube,_components,_noise)
+@st.cache_data(max_entries=16,show_spinner=False)
+def region_areas(key,_cube,cx,cy,region_radius,near_factor=3.):
+    yy,xx=np.indices(_cube.data.shape[1:]);sx,sy=_cube.pixel_arcsec
+    r=np.hypot((xx-cx)*sx,(yy-cy)*sy)
+    return dict(inside=int((r<=region_radius).sum()),near=int(((r>region_radius)&(r<=near_factor*region_radius)).sum()),far=int((r>near_factor*region_radius).sum()))
 
 
 with st.sidebar:
@@ -207,12 +217,42 @@ analysis=dict(signature=signature,detection_signature=detection_signature,result
               runs={k:{name:value for name,value in run.items() if name!='components'} for k,run in detection['runs'].items()})
 st.session_state['analysis']=analysis
 st.dataframe(pd.DataFrame(status),hide_index=True,width='stretch')
+
+st.markdown('**Detection reliability**')
+st.caption('Is a component real? This uses no line catalogue. Components outside the source region are the artefact control sample: for each component inside it, the app counts same-sign components outside that are at least as strong in both peak integrated S/N and number of channels, scales that count to the source-region area, and compares it with the number observed inside. The near (≤3× radius) and far control zones are scored separately and the worse one is used. Reliability is 1 − (84% upper limit of expected artefacts) / (observed). It assumes real features outside the region are rare, so it errs on the cautious side; it is not a calibrated false-alarm probability.')
+a,b,c=st.columns(3)
+region_radius=a.number_input('Source region radius (arcsec)',min_value=float(ref.beam_arcsec),value=float(5*ref.beam_arcsec),format='%.3f',help='Centred on the aperture centre. Default: five beams.',key='region_radius_'+reference)
+min_reliability=b.slider('Minimum detection reliability',0.,1.,.5,step=.05,help='Features below this are not matched or reviewed unless you include them.')
+include_low=c.checkbox('Also match and review low-reliability features',False)
+scores={};positions=[];position_ids=[]
+for k,run in detection['runs'].items():
+    cube=loaded[k]['cube'];components=run['components']
+    if not components:continue
+    wcs=WCS(cube.header).celestial
+    props=strengths(detection_signature+k,cube,components,cube_noise(loaded[k]['fingerprint'],cube))
+    world=wcs.pixel_to_world([c['x'] for c in components],[c['y'] for c in components])
+    dra,ddec=sky.spherical_offsets_to(world)
+    offsets=np.c_[dra.to_value('arcsec'),ddec.to_value('arcsec')];radius=np.hypot(offsets[:,0],offsets[:,1])
+    cx,cy=(float(v) for v in wcs.world_to_pixel(sky))
+    areas=region_areas(loaded[k]['fingerprint'],cube,round(cx,3),round(cy,3),round(region_radius,6))
+    for c,p,r,rel,xy in zip(components,props,radius,detection_reliability(props,radius,region_radius,areas),offsets):
+        scores[c['id']]=dict(p,**rel,distance_arcsec=float(r),spw=k);positions.append(xy);position_ids.append(c['id'])
+for ident,n in zip(position_ids,neighbour_counts(positions,max(v['cube'].beam_arcsec for v in loaded.values()))):scores[ident]['neighbours']=n
+def passes_reliability(ident):
+    rel=scores.get(ident,{}).get('reliability')
+    return include_low or (rel is not None and rel>=min_reliability)
+in_region=[s for s in scores.values() if s['region']=='Source']
+st.caption(f"{len(in_region)} of {len(scores)} components lie inside the {region_radius:.3f}″ source region; {sum(1 for s in in_region if s['reliability'] is not None and s['reliability']>=min_reliability)} reach reliability ≥ {min_reliability:.2f}. Neighbours count other components (any sign or window) within one beam.")
+with st.expander('Reliability of every component in the source region'):
+    if in_region:
+        st.dataframe(pd.DataFrame([dict(ID=i,Sign=s['sign'],Reliability=s['reliability'],Best_estimate=s['reliability_best'],Peak_SNR=round(s['peak_snr'],1),Channels=s['channels'],Pixels=s['pixels'],Neighbours=s['neighbours'],Distance_arcsec=round(s['distance_arcsec'],3),Stronger_inside=s['observed'],Stronger_near=s['control_near'],Stronger_far=s['control_far']) for i,s in scores.items() if s['region']=='Source']).sort_values('Reliability',ascending=False),hide_index=True,width='stretch')
+    else:st.info('No components inside the source region. Check the aperture centre and region radius.')
 rows=[];lookup={}
 for k,features in analysis['results'].items():
     for q in features:
         lookup[q['id']]=(k,q)
         measurement=q.get('aperture_measurement',{})
-        rows.append(dict(ID=q['id'],SPW=loaded[k]['name'],Sign=q['sign'],SNR=round(q['snr'],2) if q['snr'] is not None else None,Significant=q['significant'],Observed_GHz=matching_frequency(q),Centroid='Aperture' if measurement.get('reliable') else 'ESPADA fallback',Centroid_error_kms=measurement.get('centroid_error_kms') if measurement.get('reliable') else None,Sigma_kms=measurement.get('sigma_kms') if measurement.get('reliable') else None,Start=q['lo'],End=q['hi'],Flags=', '.join(q['flags'])))
+        rows.append(dict(ID=q['id'],SPW=loaded[k]['name'],Sign=q['sign'],SNR=round(q['snr'],2) if q['snr'] is not None else None,Significant=q['significant'],Observed_GHz=matching_frequency(q),Centroid='Aperture' if measurement.get('reliable') else 'ESPADA fallback',Centroid_error_kms=measurement.get('centroid_error_kms') if measurement.get('reliable') else None,Sigma_kms=measurement.get('sigma_kms') if measurement.get('reliable') else None,Start=q['lo'],End=q['hi'],Reliability=scores.get(q['id'],{}).get('reliability'),Region=scores.get(q['id'],{}).get('region'),Peak_SNR=round(scores[q['id']]['peak_snr'],1) if q['id'] in scores else None,Channels=q['hi']-q['lo']+1,Neighbours=scores.get(q['id'],{}).get('neighbours'),Flags=', '.join(q['flags'])))
 if not rows:st.info('No ESPADA components intersect this aperture. Try another aperture or inspect detection settings.');st.stop()
 if not any(r['Significant'] for r in rows):st.info('No features pass the current aperture significance screen. ESPADA components remain below for provisional review; enable “Also match provisional features” to inspect their possible identifications.')
 solution_context=dict(detection=detection_context,redshift=z)
@@ -255,9 +295,39 @@ matches={}
 if identifications:
     for k,features in analysis['results'].items():
         if k not in identifications['selected']:continue
-        targets=[q for q in features if q['significant'] or include_provisional]
+        targets=[q for q in features if (q['significant'] or include_provisional) and passes_reliability(q['id'])]
         matches.update(match_features(targets,identifications['selected'][k],z,halfwidth))
     matches=add_evidence(matches,lookup,identifications['selected'],loaded,z,companion_tolerance,linked,analysis['results'])
+# Identification probabilities: which transition, given that the feature is real.
+store=st.session_state.get('assignments_by_feature',{})
+anchor_offsets=[]
+for ident,(k,q) in lookup.items():
+    a=store.get(feature_keys[ident])
+    if a and a.get('reviewed') and a.get('transition') and q['significant'] and (scores.get(ident,{}).get('reliability') or 0)>=min_reliability:
+        anchor_offsets.append(C*(1-matching_frequency(q)/(a['transition']['rest_GHz']/(1+z))))
+anchors=anchor_statistics(anchor_offsets)
+st.session_state.setdefault('id_sigma',30.);st.session_state.setdefault('id_mean',0.)
+def use_anchors():st.session_state.update(id_sigma=round(max(anchors['sigma_kms'],5.),1),id_mean=round(anchors['mean_kms'],1))
+a,b,c=st.columns([1,1,1.4])
+id_sigma=a.number_input('Line velocity scatter σ (km/s)',5.,500.,step=5.,key='id_sigma',help='Spread of true lines around the systemic velocity, before adding each centroid error.')
+id_mean=b.number_input('Mean velocity offset (km/s)',-500.,500.,step=5.,key='id_mean',help='Corrects a systematic offset, for example from the redshift or reference frame.')
+if anchors:
+    c.caption(f"{anchors['n']} reviewed, significant and reliable anchor lines: mean offset {anchors['mean_kms']:+.1f} km/s, scatter {anchors['sigma_kms']:.1f} km/s.")
+    c.button('Use anchor calibration',on_click=use_anchors,disabled=anchors['n']<3,help='Needs at least three anchors.')
+else:c.caption('Review a few secure lines to calibrate σ and the mean offset from your own data.')
+match_settings.update(region_radius_arcsec=region_radius,min_reliability=min_reliability,include_low_reliability=include_low,id_sigma_kms=id_sigma,id_mean_kms=id_mean)
+id_scores={}
+if identifications:
+    for ident,options in matches.items():
+        k,q=lookup[ident];measurement=q.get('aperture_measurement',{})
+        error=measurement.get('centroid_error_kms') if measurement.get('reliable') else None
+        probabilities,p_none=identification_probabilities([o['velocity_offset_kms'] for o in options],id_sigma,id_mean,halfwidth,error)
+        rel=scores.get(ident,{}).get('reliability')
+        for o,pr in zip(options,probabilities):o.update(id_probability=pr,combined_probability=rel*pr if rel is not None else None)
+        f=loaded[k]['cube'].frequency;low,high=float(min(f)),float(max(f));middle=(low+high)/2
+        coverage=(high-low)+2*halfwidth/C*middle
+        id_scores[ident]=dict(p_unidentified=p_none,chance=chance_match_probability(len(identifications['selected'].get(k,[])),coverage,matching_frequency(q),id_sigma,id_mean))
+    st.caption(f'Each candidate’s probability assumes the feature is real: Gaussian in velocity offset (mean {id_mean:+.0f} km/s, σ {id_sigma:.0f} km/s combined with the centroid error), against an “unidentified” alternative with the weight of one line spread over ±{halfwidth:.0f} km/s. Combined = detection reliability × identification probability. Chance match is the probability that at least one unrelated catalogue line lies within ±2σ at this catalogue density; when it is high, a match on its own means little.')
 st.session_state['identification_matches']=matches
 if identifications:
     st.caption('Live query time: '+identifications['queried_utc'])
@@ -266,7 +336,8 @@ if identifications:
     with st.expander('Catalogue filter audit'):
         st.json({k:a['reason_counts'] for k,a in identifications['audits'].items()})
         st.download_button('Download catalogue query and filter audit',json.dumps(identifications,indent=2),'live_catalogue_audit.json','application/json')
-assignments,solution=identification_review(lookup,matches,solution_context,feature_keys,loaded,extractions,{r.ID:(int(r.Start),int(r.End)) for _,r in edited.iterrows()},dict(queried_utc=identifications['queried_utc'],settings=match_settings) if identifications else None,identifications['queried_utc'] if identifications else None,Path(os.environ.get('CONLINES_SOLUTION_DIR',ROOT/'solutions')))
+review_scores={ident:dict(reliability=scores.get(ident,{}).get('reliability'),region=scores.get(ident,{}).get('region'),**id_scores.get(ident,{})) for ident in lookup}
+assignments,solution=identification_review(lookup,matches,solution_context,feature_keys,loaded,extractions,{r.ID:(int(r.Start),int(r.End)) for _,r in edited.iterrows()},dict(queried_utc=identifications['queried_utc'],settings=match_settings) if identifications else None,identifications['queried_utc'] if identifications else None,Path(os.environ.get('CONLINES_SOLUTION_DIR',ROOT/'solutions')),scores=review_scores,review_ids=[i for i in lookup if passes_reliability(i)])
 
 st.subheader('5 · Make integrated maps')
 adopted_ids=st.multiselect('Adopt features for mapping',list(lookup),format_func=lambda ident:f"{ident} · {lookup[ident][1]['sign']}",key='adopt_'+signature)
