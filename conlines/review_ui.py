@@ -87,6 +87,8 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
         carried={ident:store[feature_keys[ident]] for ident in ids if feature_keys[ident] in store}
         st.session_state[state_key]=dict(assignments=suggest_assignments(ids,{},carried),cursor=None,revision=None,widget_revision=0,provenance=None)
     state=st.session_state[state_key]
+    if state.get('method',method)!=method:state['cursor']=None   # a new method: close the open review card
+    state['method']=method
     if revision and revision!=state['revision']:
         state['assignments']=suggest_assignments(ids,matches,state['assignments'],suggestions,method)
         state.update(revision=revision,provenance=provenance,widget_revision=state['widget_revision']+1)
@@ -95,9 +97,6 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
         line=assignments[ident]['transition']
         if line is not None:
             line['velocity_offset_kms']=float(C*(1-matching_frequency(q)/(line['rest_GHz']/(1+context['redshift']))))
-    if state['provenance']:
-        st.caption('Assignment catalogue provenance: '+str(state['provenance'].get('queried_utc','saved solution'))+'. Reviewed choices are retained when live matches are refreshed.')
-    st.caption({'builtin':'Nearest-frequency matches','admit':'ADMIT choices','amase':'Astro AMASE assignments'}.get(method,'Suggestions')+' are tentative suggestions. Review them here without returning to Step 3. A question mark on the plot means the assignment has not been manually reviewed.')
     queue=[i for i in ids if review_ids is None or i in set(review_ids)]
     summary=[]
     for ident,(k,q) in lookup.items():
@@ -106,15 +105,21 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
         fresh=next((r for r in matches.get(ident,[]) if line is not None and transition_key(r)==transition_key(line)),{})
         probability=fresh.get('id_probability') if line is not None else (score.get('p_unidentified') if matches.get(ident) else None)
         summary.append(dict(Feature=ident,SPW=loaded[k]['name'],Sign=q['sign'],Significant=q['significant'],Reliability=score.get('reliability'),Assignment=line['species'] if line else 'Unidentified',Rest_GHz=line['rest_GHz'] if line else None,Offset_kms=line.get('velocity_offset_kms') if line else None,P_assignment=probability,Combined=probability*score['reliability'] if probability is not None and score.get('reliability') is not None else None,Chance_match=score.get('chance'),Method_note=score.get('method_note'),Review='Reviewed' if a['reviewed'] else 'Tentative',In_review_queue=ident in queue))
-    st.dataframe(pd.DataFrame(summary),hide_index=True,width='stretch')
     reviewed=sum(assignments[i]['reviewed'] for i in queue)
-    if queue:st.progress(reviewed/len(queue),text=f'{reviewed} of {len(queue)} features in the review queue manually reviewed')
-    if len(queue)<len(ids):st.caption(f'{len(ids)-len(queue)} features below the detection-reliability cut are left out of the review queue; they stay in the table and can still be mapped.')
-    show_spw=st.selectbox('SPW identification overview',list(dict.fromkeys(k for k,q in lookup.values())),format_func=lambda k:loaded[k]['name'],key='overview_'+scope)
-    st.plotly_chart(spectrum_plot(loaded[show_spw]['cube'],extractions[show_spw],[q for k,q in lookup.values() if k==show_spw],assignments=assignments),width='stretch',key='assignplot_'+scope)
+    st.caption({'builtin':'Nearest-velocity matches','admit':'ADMIT choices','amase':'Astro AMASE assignments'}.get(method,'Suggestions')+' are only suggestions until you confirm them. Go through the features one by one and pick the right identification, or “Unidentified”.')
+    if queue:st.progress(reviewed/len(queue),text=f'{reviewed} of {len(queue)} features reviewed')
+    if len(queue)<len(ids):st.caption(f'{len(ids)-len(queue)} likely artefact'+('s are' if len(ids)-len(queue)!=1 else ' is')+' left out of the review; '+('they' if len(ids)-len(queue)!=1 else 'it')+' can still be mapped.')
+    with st.expander('Overview of all identifications'):
+        st.dataframe(pd.DataFrame([dict(Feature=r['Feature'],Window=r['SPW'],Type=r['Sign'],Identification=r['Assignment'],Probability=r['P_assignment'],Review=r['Review']) for r in summary]),hide_index=True,width='stretch')
+        show_spw=st.selectbox('Spectral window',list(dict.fromkeys(k for k,q in lookup.values())),format_func=lambda k:loaded[k]['name'],key='overview_'+scope)
+        st.plotly_chart(spectrum_plot(loaded[show_spw]['cube'],extractions[show_spw],[q for k,q in lookup.values() if k==show_spw],assignments=assignments),width='stretch',key='assignplot_'+scope)
+        st.caption('A question mark on the plot means the identification has not been reviewed yet.')
+        if st.checkbox('Show all columns',key='overview_all_'+scope):st.dataframe(pd.DataFrame(summary),hide_index=True,width='stretch')
+        if state['provenance']:
+            st.caption('Assignment catalogue provenance: '+str(state['provenance'].get('queried_utc','saved solution'))+'. Reviewed choices are retained when live matches are refreshed.')
 
     def start_review():state['cursor']=0
-    st.button('Review identifications one by one',on_click=start_review,key='start_'+scope)
+    st.button('Review identifications one by one',on_click=start_review,key='start_'+scope,type='primary' if reviewed<len(queue) and state['cursor'] is None else 'secondary')
     cursor=state['cursor']
     if cursor is not None and cursor<len(queue):
         ident=queue[cursor];k,q=lookup[ident];current=assignments[ident]
@@ -160,39 +165,39 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
     elif cursor is not None:
         st.success('Review complete. Your assignments are ready to save and use for maps.')
 
-    st.markdown('**Save or reuse an identification solution**')
-    name=st.text_input('Solution name',value='IC 860 identification' if any('IC 860' in v['name'] for v in loaded.values()) else 'Line identification',max_chars=100,key='solution_name_'+scope)
-    payload=make_solution(name,context,feature_keys,assignments,intervals,state['provenance'])
-    payload['measurement_method']='signed aperture moments v1'
-    for record,record_id in zip(payload['features'],feature_keys):
-        record['aperture_measurement']=lookup[record_id][1].get('aperture_measurement')
-    payload['evidence_snapshot']=dict(queried_utc=provenance.get('queried_utc') if provenance else None,
-                                    selected={feature_keys[ident]:next((r.get('evidence') for r in matches.get(ident,[]) if transition_key(r)==transition_key(a['transition'])),None) for ident,a in assignments.items()})
-    data=json.dumps(payload,indent=2,allow_nan=False)
-    a,b=st.columns(2)
-    a.download_button('Download solution (JSON)',data,'identification_solution.json','application/json',key='download_solution_'+scope)
-    if b.button('Save solution locally',key='save_solution_'+scope):
-        folder=Path(solution_dir);folder.mkdir(parents=True,exist_ok=True)
-        slug=re.sub('[^a-zA-Z0-9_-]+','-',name).strip('-')[:60] or 'solution'
-        path=folder/f'{slug}-{uuid.uuid4().hex[:8]}.json';path.write_text(data)
-        st.success(f'Saved {path.name}')
-    st.caption('Solutions store assignments, review status, integration channels and analysis settings. Reload them with the same cubes, aperture, redshift and detection settings. Within a session, reviewed choices follow each detected component when you move the aperture. Reusing assignments does not query a cached catalogue; new candidate searches always use live Splatalogue.')
-    with st.expander('Load a saved solution'):
-        saved=sorted(Path(solution_dir).glob('*.json'),key=lambda p:p.stat().st_mtime,reverse=True)
-        chosen_file=st.selectbox('Locally saved solutions',saved,format_func=lambda p:p.name,key='saved_solution_'+scope) if saved else None
-        upload=st.file_uploader('Or upload a solution JSON',type=['json'],key='upload_solution_'+scope)
-        if st.button('Load solution',disabled=upload is None and chosen_file is None,key='load_solution_'+scope):
-            try:
-                raw=upload.getvalue().decode('utf-8') if upload is not None else chosen_file.read_text()
-                if len(raw)>5_000_000:raise ValueError('Solution exceeds 5 MB.')
-                restored=json.loads(raw)
-                aa,ii=restore_solution(restored,context,feature_keys,{ident:len(loaded[k]['cube'].frequency) for ident,(k,q) in lookup.items()})
-                state.update(assignments=aa,cursor=None,widget_revision=state['widget_revision']+1,provenance=restored.get('catalogue_provenance'))
-                st.session_state['solution_intervals_'+scope]=ii
-                st.session_state['interval_revision_'+scope]=st.session_state.get('interval_revision_'+scope,0)+1
-                st.session_state['solution_notice_'+scope]='Loaded solution: '+str(restored.get('name','Untitled'))
-                st.rerun()
-            except (ValueError,TypeError,KeyError,OSError) as e:st.error(f'Could not load solution: {e}')
+    with st.expander('Save or load an identification solution'):
+        name=st.text_input('Solution name',value='IC 860 identification' if any('IC 860' in v['name'] for v in loaded.values()) else 'Line identification',max_chars=100,key='solution_name_'+scope)
+        payload=make_solution(name,context,feature_keys,assignments,intervals,state['provenance'])
+        payload['measurement_method']='signed aperture moments v1'
+        for record,record_id in zip(payload['features'],feature_keys):
+            record['aperture_measurement']=lookup[record_id][1].get('aperture_measurement')
+        payload['evidence_snapshot']=dict(queried_utc=provenance.get('queried_utc') if provenance else None,
+                                        selected={feature_keys[ident]:next((r.get('evidence') for r in matches.get(ident,[]) if transition_key(r)==transition_key(a['transition'])),None) for ident,a in assignments.items()})
+        data=json.dumps(payload,indent=2,allow_nan=False)
+        a,b=st.columns(2)
+        a.download_button('Download solution (JSON)',data,'identification_solution.json','application/json',key='download_solution_'+scope)
+        if b.button('Save solution locally',key='save_solution_'+scope):
+            folder=Path(solution_dir);folder.mkdir(parents=True,exist_ok=True)
+            slug=re.sub('[^a-zA-Z0-9_-]+','-',name).strip('-')[:60] or 'solution'
+            path=folder/f'{slug}-{uuid.uuid4().hex[:8]}.json';path.write_text(data)
+            st.success(f'Saved {path.name}')
+        st.caption('Solutions store assignments, review status, integration channels and analysis settings. Reload them with the same cubes, aperture, redshift and detection settings. Within a session, reviewed choices follow each detected component when you move the aperture. Reusing assignments does not query a cached catalogue; new candidate searches always use live Splatalogue.')
+        with st.expander('Load a saved solution'):
+            saved=sorted(Path(solution_dir).glob('*.json'),key=lambda p:p.stat().st_mtime,reverse=True)
+            chosen_file=st.selectbox('Locally saved solutions',saved,format_func=lambda p:p.name,key='saved_solution_'+scope) if saved else None
+            upload=st.file_uploader('Or upload a solution JSON',type=['json'],key='upload_solution_'+scope)
+            if st.button('Load solution',disabled=upload is None and chosen_file is None,key='load_solution_'+scope):
+                try:
+                    raw=upload.getvalue().decode('utf-8') if upload is not None else chosen_file.read_text()
+                    if len(raw)>5_000_000:raise ValueError('Solution exceeds 5 MB.')
+                    restored=json.loads(raw)
+                    aa,ii=restore_solution(restored,context,feature_keys,{ident:len(loaded[k]['cube'].frequency) for ident,(k,q) in lookup.items()})
+                    state.update(assignments=aa,cursor=None,widget_revision=state['widget_revision']+1,provenance=restored.get('catalogue_provenance'))
+                    st.session_state['solution_intervals_'+scope]=ii
+                    st.session_state['interval_revision_'+scope]=st.session_state.get('interval_revision_'+scope,0)+1
+                    st.session_state['solution_notice_'+scope]='Loaded solution: '+str(restored.get('name','Untitled'))
+                    st.rerun()
+                except (ValueError,TypeError,KeyError,OSError) as e:st.error(f'Could not load solution: {e}')
     notice=st.session_state.get('solution_notice_'+scope)
     if notice:st.info(notice)
     # Distinct names: the confirm callback above reads `ident` when it runs.

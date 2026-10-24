@@ -149,66 +149,77 @@ python -m pip install -r requirements-ui.txt
 python -m streamlit run app.py
 ```
 
-Open http://127.0.0.1:8501. Cubes stay local. The interface now uses the real
-ESPADA/SoFiA 3D finder first, followed by **live Splatalogue only** for identification.
-Archived catalogue snapshots remain solely for reproducing the historical pilot.
+Open http://127.0.0.1:8501. Cubes stay local.
 
-1. Upload multiple FITS cubes, supply local paths, or select the IC 860 full-field examples.
-2. Run ESPADA on each full cube, independently of any aperture, redshift or
-   molecular catalogue. Both emission and absorption are enabled by default.
-   Every component in the field is shown on a map and in a table, with a feature
-   ID that belongs to the cube's detection (for example `SPW0-F003`) and stays
-   fixed when the aperture changes. Detection reruns only when the cubes or the
-   finder settings (voxel threshold, trial widths, mode, continuum flag) change.
-3. Choose a circle, ellipse, rectangle or single pixel and inspect the extracted
-   aperture-mean spectra and spatial noise controls. Default radius is one beam
-   major-axis FWHM. The centre can also be set on any detected component.
-   Shared sky positions are projected onto each SPW separately.
-   The example defaults to the continuum nucleus position. Step 3 has a 3× preview
-   zoom; extraction and noise estimation always use the full loaded field. Controls
-   are integer-pixel translations of the exact source stencil, avoiding boundary
-   round-off changing their pixel counts. Set zoom to 1 to inspect the full field.
-   Components whose masks intersect the aperture are screened automatically: all
-   are labelled on the spectrum, and green features pass the additional aperture
-   significance screen. Moving the aperture re-screens without rerunning ESPADA.
-4. Fetch live Splatalogue matches for all detected features by default (uncheck the provisional
-   option to restrict to significant ones). Every explicit matching request fetches fresh data. Network failure
-   leaves detections available without substituting a saved catalogue. Changing
-   catalogue filters or redshift does not invalidate detection or its significance.
-   Moving the aperture does not need a new query: matches and companion evidence
-   are recomputed from the same live response for the new aperture features.
-   Reviewed choices follow each detected component within a session.
-   Queries now cover each loaded SPW's full frequency range, including SPWs with
-   no detections. Species IDs, catalogue names, lower energies and the original
-   frequency text are retained alongside the existing transition metadata.
-5. Step 4 proposes the closest frequency match for every queried feature, within
-   the adjustable default ±200 km/s tolerance. The overview table and spectrum
-   label these **tentative** suggestions. Use **Review identifications one by one**
-   to choose a transition or leave a feature unidentified, then **Confirm & next**.
-   This panel has its own spectrum and does not depend on the Step 3 inspector.
-   Reviewed choices survive catalogue refreshes; a choice absent from the current
-   filtered catalogue is kept and identified as such in the review panel.
-   The **Evidence for this identification** panel shows the aperture centroid,
-   its estimated error, the signed second-moment width, catalogue metadata and
-   other transitions of the same catalogue species entry. Companion matches must
-   lie inside another feature's interval and agree with the candidate's velocity
-   offset within the adjustable default 50 km/s. Significant and provisional
-   features are counted separately; multiple transitions in one feature count
-   once. Opposite-sign features and uncertain centroids are shown separately.
-   A companion spectrum viewer marks the predicted position at that velocity.
-   These are frequency-compatibility checks, not identification probabilities.
-6. Download a named solution as JSON or save it locally (ignored `solutions/`).
-   Load a local solution or upload its JSON later. Solutions include assignments,
-   review status, integration intervals, data fingerprints, aperture/detection
-   settings, redshift and original live-query provenance. Only matching analyses
-   are accepted; files may move to another path because identity is based on data
-   and WCS, not filenames. Reusing chosen assignments is distinct from querying
-   a catalogue: fresh alternatives always come from live Splatalogue.
-7. Select features for maps in Step 5. It uses Step 4's assignments automatically,
-   with no repeated transition selection. Unidentified maps use the observed
-   centroid as the velocity-width reference, recording VREFGHZ instead of an
-   assumed rest frequency/redshift. IDSTAT records TENTATIVE or REVIEWED.
-   Previews default to 3× zoom; FITS maps retain the full spatial field.
+### Using the app: five steps
+
+The app is a guided sequence. Only the current step is open, with a short
+**What to do** line and one main button. A finished step folds into a single line
+with a ✓ and a summary (for example *2 · Find lines — 8 features found across
+1 cube*); click it to look at or change it. Later steps follow the change: new
+cubes or detection settings send you back to Step 2, while moving the aperture or
+changing the redshift just updates the later steps. Each setting appears in the
+step that uses it, and expert settings sit in folded **(advanced)** sections with
+sensible defaults. **Start over** clears everything.
+
+1. **Load data.** Upload FITS cubes, give local file paths (better for large
+   cubes), or pick the IC 860 full-field example; one cube per spectral window.
+   A table shows each cube's channels, frequency range, beam and frame. Press
+   **Continue**.
+2. **Find lines.** Press **Find lines in all cubes**. ESPADA/SoFiA searches each
+   full cube for emission and absorption, independent of any aperture, redshift or
+   catalogue. Every feature is shown on a map and in a table, with an ID that
+   belongs to the cube's detection (for example `SPW0-F003`) and stays fixed when
+   the aperture moves. *Advanced:* voxel threshold, trial widths, emission/absorption,
+   continuum subtraction. Detection reruns only when the cubes or these settings change.
+3. **Choose region.** Choose where to extract a spectrum: image centre, brightness
+   peak, the continuum nucleus (example), a detected feature, or a pixel position;
+   then the aperture shape and radius (default one beam). The spectrum and the
+   features at that position appear at once, with counts of features, significant
+   ones, reliable ones and likely artefacts set aside (see *Detection reliability*
+   below). *Advanced:* linking the sky position across SPWs, preview zoom, the
+   significance threshold, the source-region radius and the reliability cut.
+   Moving the aperture re-screens without rerunning ESPADA. Press **Continue to
+   line identification**.
+4. **Identify lines.** Set the redshift (IC 860 example: cz = 3880 km/s), then
+   pick a method (see *Identification methods* below):
+   - *Velocity likelihood* and *ADMIT* need a Splatalogue search: choose the
+     astronomical filters (and, for the built-in method, the match window), then
+     press **Search Splatalogue**. Catalogue filters (energy, Einstein A,
+     isotopologues, excited states) are under *advanced*; ADMIT applies its own
+     rules, so it uses only the filters.
+   - *Astro AMASE* uses its own CDMS/JPL database, not Splatalogue. If it is not
+     installed, the step shows **Set up Astro AMASE…**. Then press **Run Astro AMASE**.
+     A Splatalogue search is optional and only feeds the companion-line evidence.
+
+   The suggestions are tentative. Press **Review identifications one by one**,
+   choose a transition (or *Unidentified*) for each feature with the help of the
+   evidence panel, and **Confirm & next**. Reviewed choices are kept when you
+   search again, switch method or move the aperture. *Save or load an
+   identification solution* (folded) stores assignments, review status, channel
+   ranges, data fingerprints, settings and query provenance as JSON; a solution
+   loads only onto the same data and analysis. *Advanced:* which features to
+   identify (provisional, low-reliability) and the companion velocity tolerance.
+   Press **Continue to maps**.
+5. **Make maps.** Choose the features to map (default: those you identified and
+   reviewed), check their channel ranges (editable; this changes the maps only,
+   not the detection), choose the baseline subtraction and press **Generate maps &
+   download bundle**. Unidentified features can be mapped too: they use the
+   observed centroid as the velocity-width reference (VREFGHZ) instead of an
+   assumed rest frequency. IDSTAT records TENTATIVE or REVIEWED. Absorption keeps
+   its negative sign.
+
+Details on matching and evidence:
+the closest velocity match is proposed within the default ±200 km/s window.
+Queries cover each loaded SPW's full frequency range, including SPWs with no
+detections, and every search fetches fresh live data; a network failure leaves
+detections intact without substituting a saved catalogue. Archived catalogue
+snapshots are used only to reproduce the historical pilot. The **Evidence for this
+identification** panel shows the aperture centroid and its error, the signed
+second-moment width, catalogue metadata and other transitions of the same species
+entry. Companion matches must lie inside another feature's interval and agree in
+velocity within the default 50 km/s; significant and provisional features are
+counted separately, and these are frequency-compatibility checks, not probabilities.
 
 Nearest frequency is not a physical identification or a probability ranking.
 Matching now uses signed aperture moments inside the original ESPADA interval
@@ -348,7 +359,7 @@ tentative until you review them, and detection reliability applies to all three.
 
 #### Setting up Astro AMASE
 
-In Step 4 › Astro AMASE settings, press **Set up Astro AMASE…**, or double-click
+In Step 4, choose Astro AMASE and press **Set up Astro AMASE…**, or double-click
 **Set up Astro AMASE.command** in the project folder. It installs everything into
 `.local-tools/`, which is git-ignored:
 

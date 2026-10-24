@@ -10,6 +10,21 @@ ROOT=Path(__file__).resolve().parents[1]
 
 
 def by_label(elements,label):return next(e for e in elements if e.label==label)
+def click(app,label):return by_label(app.button,label).click().run()
+
+
+def load_and_find(app,paths):
+    """Step 1 (file paths) and Step 2 (find lines); leaves the app at Step 3."""
+    app.radio[0].set_value('Local file paths').run()
+    app.text_area[0].set_value(paths).run()
+    click(app,'Continue →')
+    return click(app,'Find lines in all cubes')
+
+
+def to_identify(app):return click(app,'Continue to line identification →')
+def to_maps(app):
+    if not any(b.label=='Continue to maps →' for b in app.button):to_identify(app)
+    return click(app,'Continue to maps →')
 
 
 @pytest.fixture
@@ -21,9 +36,7 @@ def workbench(tmp_path,monkeypatch):
     monkeypatch.setattr(conlines.espada_backend,'run_espada',lambda *a,**kw:dict(components=components,status={},parameters={},console_log='UI fixture'))
     monkeypatch.setenv('CONLINES_SOLUTION_DIR',str(tmp_path/'solutions'))
     app=AppTest.from_file(str(ROOT/'app.py'),default_timeout=60).run()
-    app.radio[0].set_value('Local file paths').run()
-    app.text_area[0].set_value(str(path)).run()
-    by_label(app.button,'Run detection across all loaded SPWs').click().run()
+    load_and_find(app,str(path))
     assert not app.exception and not app.error,[e.value for e in app.error]
     return app,tmp_path
 
@@ -37,7 +50,10 @@ def test_empty_app():
 def test_detection_without_catalogue_and_unidentified_export(workbench):
     app,_=workbench
     analysis=app.session_state['analysis'];first=next(iter(analysis['results'].values()))[0]['id']
-    by_label(app.multiselect,'Adopt features for mapping').set_value([first]).run()
+    # Settings for later steps are not shown yet.
+    assert not any(n.label=='Redshift z' for n in app.number_input)
+    to_maps(app)
+    by_label(app.multiselect,'Features to map').set_value([first]).run()
     by_label(app.button,'Generate maps & download bundle').click().run()
     assert not app.exception and not app.error,[e.value for e in app.error]
     assert any('Generated 1 signed maps' in s.value for s in app.success)
@@ -50,11 +66,13 @@ def test_detection_without_catalogue_and_unidentified_export(workbench):
     assert not app.exception and app.session_state['detection']==detection
     assert app.session_state['analysis']['signature']!=original_signature
     assert app.session_state['analysis']['detection_signature']==detection['signature']
-    assert not any('Rerun detection' in s.value for s in app.info)
+    assert not any('settings changed' in s.value for s in app.info)
     assert [q['id'] for q in next(iter(app.session_state['analysis']['results'].values()))]==[first,'Cube1-F002']
-    # Changing a finder setting does invalidate the detection.
+    assert app.session_state['stage']==5
+    # Changing a finder setting does invalidate the detection and returns to Step 2.
     by_label(app.number_input,'ESPADA voxel threshold (σ)').set_value(6.).run()
-    assert any('Rerun detection' in s.value for s in app.info)
+    assert any('settings changed' in s.value for s in app.info)
+    assert app.session_state['stage']==2
     assert not any(b.label=='Generate maps & download bundle' for b in app.button)
 
 
@@ -70,9 +88,10 @@ def test_detection_comes_before_aperture_and_runs_once(tmp_path,monkeypatch):
     app=AppTest.from_file(str(ROOT/'app.py'),default_timeout=60).run()
     app.radio[0].set_value('Local file paths').run()
     app.text_area[0].set_value(str(path)).run()
-    assert any('Run detection to continue' in s.value for s in app.info)
+    assert not any(b.label=='Find lines in all cubes' for b in app.button)   # one step at a time
+    click(app,'Continue →')
     assert not any(n.label=='Radius / half-width (arcsec)' for n in app.number_input)
-    by_label(app.button,'Run detection across all loaded SPWs').click().run()
+    click(app,'Find lines in all cubes')
     assert not app.exception and len(calls)==1
     assert [c['id'] for c in app.session_state['detection']['runs'][next(iter(app.session_state['detection']['runs']))]['components']]==['Cube1-F001','Cube1-F002']
     assert [q['id'] for q in next(iter(app.session_state['analysis']['results'].values()))]==['Cube1-F001']
@@ -87,10 +106,10 @@ def test_catalogue_failure_preserves_detections(workbench,monkeypatch):
     import conlines.core
     app,_=workbench
     monkeypatch.setattr(conlines.core,'query_catalogue',lambda *a: (_ for _ in ()).throw(RuntimeError('offline test')))
-    original=app.session_state['analysis']
+    to_identify(app);original=app.session_state['analysis']
     by_label(app.multiselect,'Astronomical filters').set_value(['Hot Cores']).run()
     assert app.session_state['analysis']==original
-    by_label(app.button,'Match features with live Splatalogue').click().run()
+    click(app,'Search Splatalogue')
     assert not app.exception and app.session_state['analysis']==original
     assert 'offline test' in app.session_state['identifications']['status'][0]['Status']
     assert app.session_state['identifications']['selected']=={}
@@ -100,11 +119,12 @@ def test_catalogue_failure_preserves_detections(workbench,monkeypatch):
 def test_batch_suggestions_sequential_review_save_load_and_maps(workbench,monkeypatch):
     import conlines.core
     app,tmp=workbench;features=next(iter(app.session_state['analysis']['results'].values()))
+    to_identify(app)
     z=by_label(app.number_input,'Redshift z').value
     rows=[dict(species=f'Molecule {i}',rest_GHz=f['frequency_GHz']*(1+z),qns='J=1-0',Eu_K=10.,log10_A_s=-4.,filters=['extragalactic']) for i,f in enumerate(features)]
     monkeypatch.setattr(conlines.core,'query_catalogue',lambda *a:rows)
     inspect=by_label(app.selectbox,'Inspect feature').value
-    by_label(app.button,'Match features with live Splatalogue').click().run()
+    click(app,'Search Splatalogue')
     assert not app.exception
     by_label(app.button,'Review identifications one by one').click().run()
     assert by_label(app.selectbox,'Identification choice').value==0
@@ -138,7 +158,9 @@ def test_batch_suggestions_sequential_review_save_load_and_maps(workbench,monkey
     def capture(image,header):
         headers.append(header.copy());return original_fits(image,header)
     monkeypatch.setattr(conlines.core,'fits_bytes',capture)
-    by_label(app.multiselect,'Adopt features for mapping').set_value([f['id'] for f in features]).run()
+    to_maps(app)
+    assert by_label(app.multiselect,'Features to map').value==[features[1]['id']]   # default: reviewed identifications
+    by_label(app.multiselect,'Features to map').set_value([f['id'] for f in features]).run()
     by_label(app.button,'Generate maps & download bundle').click().run()
     assert not app.exception and any('Generated 2 signed maps' in m.value for m in app.success)
 
@@ -157,15 +179,17 @@ def test_full_coverage_query_includes_spw_without_features(workbench,monkeypatch
     c=synthetic();c.header['CRVAL3']=172e9
     second=tmp/'second.fits';fits.writeto(second,c.data,c.header)
     app.text_area[0].set_value(str(tmp/'cube.fits')+'\n'+str(second)).run()
-    by_label(app.button,'Run detection across all loaded SPWs').click().run()
+    assert app.session_state['stage']==2
+    click(app,'Find lines in all cubes')
     assert not app.exception
+    to_identify(app)
     z=by_label(app.number_input,'Redshift z').value
     calls=[]
     def query(low,high,filters):
         calls.append((low/(1+z),high/(1+z)))
         return [dict(species='M',species_id=1,rest_GHz=f*(1+z),qns=str(i),Eu_K=10.,log10_A_s=-4.,filters=['extragalactic']) for i,f in enumerate([169.69,171.7])]
     monkeypatch.setattr(conlines.core,'query_catalogue',query)
-    by_label(app.button,'Match features with live Splatalogue').click().run()
+    click(app,'Search Splatalogue')
     assert not app.exception
     assert len(calls)==2
     assert calls[0][0]<169.36 and calls[0][1]>170
@@ -177,12 +201,13 @@ def test_full_coverage_query_includes_spw_without_features(workbench,monkeypatch
 def test_reviewed_choices_and_catalogue_survive_aperture_change(workbench,monkeypatch):
     import conlines.core
     app,_=workbench;features=next(iter(app.session_state['analysis']['results'].values()))
+    to_identify(app)
     z=by_label(app.number_input,'Redshift z').value
     calls=[]
     def query(*a):
         calls.append(a);return [dict(species=f'Molecule {i}',rest_GHz=f['frequency_GHz']*(1+z),qns='J=1-0',Eu_K=10.,log10_A_s=-4.,filters=['extragalactic']) for i,f in enumerate(features)]
     monkeypatch.setattr(conlines.core,'query_catalogue',query)
-    by_label(app.button,'Match features with live Splatalogue').click().run()
+    click(app,'Search Splatalogue')
     by_label(app.button,'Review identifications one by one').click().run()
     by_label(app.selectbox,'Identification choice').set_value(-1).run()
     by_label(app.button,'Confirm & next').click().run()
@@ -210,16 +235,15 @@ def test_low_reliability_artefact_is_not_matched_or_reviewed(tmp_path,monkeypatc
     components+=[dict(sofia_id=3+i,sign='Emission',lo=10,hi=11,x=float(x),y=float(y),frequency_GHz=f(10,11),footprint=[y*81+x]) for i,(x,y) in enumerate(controls)]
     monkeypatch.setattr(conlines.espada_backend,'run_espada',lambda *a,**kw:dict(components=components,status={},parameters={},console_log='fixture'))
     app=AppTest.from_file(str(ROOT/'app.py'),default_timeout=60).run()
-    app.radio[0].set_value('Local file paths').run()
-    app.text_area[0].set_value(str(path)).run()
-    by_label(app.button,'Run detection across all loaded SPWs').click().run()
+    load_and_find(app,str(path))
     assert not app.exception and not app.error,[e.value for e in app.error]
+    to_identify(app)
     rows={r['id']:r for r in app.session_state['analysis']['results'][next(iter(app.session_state['analysis']['results']))]}
     real=next(i for i,q in rows.items() if q['sign']=='Absorption');artefact=next(i for i,q in rows.items() if q['sign']=='Emission')
     z=by_label(app.number_input,'Redshift z').value
     lines=[dict(species=name,rest_GHz=rows[i]['frequency_GHz']*(1+z),qns='1-0',Eu_K=10.,log10_A_s=-4.,filters=['extragalactic']) for name,i in [('Real',real),('Coincidence',artefact)]]
     monkeypatch.setattr(conlines.core,'query_catalogue',lambda *a:lines)
-    by_label(app.button,'Match features with live Splatalogue').click().run()
+    click(app,'Search Splatalogue')
     assert not app.exception
     matches=app.session_state['identification_matches']
     assert matches[real][0]['species']=='Real' and matches[real][0]['id_probability']>.5
@@ -228,20 +252,20 @@ def test_low_reliability_artefact_is_not_matched_or_reviewed(tmp_path,monkeypatc
     by_label(app.button,'Review identifications one by one').click().run()
     assert any('Feature 1 of 1' in h.value for h in app.subheader)
     by_label(app.checkbox,'Also match and review low-reliability features').check().run()
-    by_label(app.button,'Match features with live Splatalogue').click().run()
     assert artefact in app.session_state['identification_matches']
 
 
 def test_admit_method_suggests_its_choice(workbench,monkeypatch):
     import conlines.core
     app,_=workbench;features={q['sign']:q for q in next(iter(app.session_state['analysis']['results'].values()))}
+    to_identify(app)
     z=by_label(app.number_input,'Redshift z').value
     rest=features['Absorption']['frequency_GHz']*(1+z)
     lines=[dict(species='CH3OH vt = 0-2',species_id=1,rest_GHz=rest,qns='a',Eu_K=300.,log10_A_s=-7.4,line_strength=2.,recommended='1',filters=['ism-hot-core']),
            dict(species='30SiO v = 0',species_id=2,rest_GHz=rest+.0005,qns='4-3',Eu_K=20.3,log10_A_s=-3.6,line_strength=9.6,recommended='1',filters=['ism-hot-core'])]
     monkeypatch.setattr(conlines.core,'query_catalogue',lambda *a:lines)
     by_label(app.radio,'Identification method').set_value('ADMIT LineID rules').run()
-    by_label(app.button,'Match features with live Splatalogue').click().run()
+    click(app,'Search Splatalogue')
     assert not app.exception,app.exception
     options=app.session_state['identification_matches'][features['Absorption']['id']]
     assert options[0]['species']=='30SiO v = 0' and options[0]['method_label'].startswith('ADMIT choice: lowest upper-state energy')
@@ -254,6 +278,7 @@ def test_admit_method_suggests_its_choice(workbench,monkeypatch):
 def test_amase_method_maps_runs_by_sign(workbench,monkeypatch):
     from conlines import amase_bridge
     app,_=workbench;features={q['sign']:q for q in next(iter(app.session_state['analysis']['results'].values()))}
+    to_identify(app)
     z=by_label(app.number_input,'Redshift z').value;v=amase_bridge.radio_velocity(z)
     calls=[]
     def fake_run(python,data,freq,intensity,params,timeout=None,**kw):
@@ -278,3 +303,19 @@ def test_amase_method_maps_runs_by_sign(workbench,monkeypatch):
     assert abs(matches[features['Absorption']['id']][0]['rest_GHz']-features['Absorption']['frequency_GHz']*(1+z))<1e-6
     by_label(app.button,'Review identifications one by one').click().run()
     assert by_label(app.selectbox,'Identification choice').value==0
+
+
+def test_switching_method_keeps_suggestions_and_hides_empty_review(workbench,monkeypatch):
+    import conlines.core
+    app,_=workbench;features=next(iter(app.session_state['analysis']['results'].values()))
+    to_identify(app)
+    z=by_label(app.number_input,'Redshift z').value
+    monkeypatch.setattr(conlines.core,'query_catalogue',lambda *a:[dict(species=f'Molecule {i}',rest_GHz=f['frequency_GHz']*(1+z),qns='J=1-0',Eu_K=10.,log10_A_s=-4.,filters=['extragalactic']) for i,f in enumerate(features)])
+    click(app,'Search Splatalogue');click(app,'Review identifications one by one')
+    assert any(s.label=='Identification choice' for s in app.selectbox)
+    by_label(app.radio,'Identification method').set_value('Astro AMASE').run()
+    # AMASE has not run: no open review card, and nothing replaces the built-in suggestions.
+    assert not app.exception and not any(s.label=='Identification choice' for s in app.selectbox)
+    by_label(app.radio,'Identification method').set_value('Velocity likelihood (built-in)').run()
+    to_maps(app)
+    assert any('2 features with an identification' in e.label for e in app.expander)

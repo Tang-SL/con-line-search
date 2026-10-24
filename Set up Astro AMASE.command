@@ -3,7 +3,7 @@
 cd -- "$(dirname -- "$0")" || exit 1
 if scripts/setup_amase.sh; then
   echo
-  echo "Back in the app, open Step 4 › Astro AMASE settings: the paths are filled in."
+  echo "Back in the app (Step 4, Astro AMASE), press “Use installed Astro AMASE”."
   read -r -p "Press Return to close. "
 else
   echo
