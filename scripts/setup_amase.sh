@@ -53,13 +53,42 @@ fi
 
 step "4/5 Astro AMASE database"
 find_db() { find "$DATA" -name all_cdms_final_official.csv -print -quit 2>/dev/null | xargs -I{} dirname {}; }
-if [[ -z "$(find_db)" ]]; then
+ZIP="$DATA/amase-database.zip"
+if [[ -z "$(find_db)" && ! -f "$ZIP" ]]; then
   mkdir -p "$DATA"
-  echo "Downloading the database from the link in the Astro AMASE README…"
-  curl -L --fail --progress-bar -o "$DATA/amase-database.zip" "$DB_URL"
-  ( cd "$DATA" && unzip -q -o amase-database.zip && rm -f amase-database.zip )
-  # Folder downloads from Dropbox can contain nested zip files.
-  find "$DATA" -name '*.zip' -print0 | while IFS= read -r -d '' z; do (cd "$(dirname "$z")" && unzip -q -o "$z" && rm -f "$z"); done
+  echo "Downloading the database (about 5 GB) from the link in the Astro AMASE README…"
+  curl -L --fail --progress-bar -o "$ZIP.part" "$DB_URL"
+  mv "$ZIP.part" "$ZIP"
+fi
+if [[ -f "$ZIP" ]]; then
+  # Unpack with Python: Dropbox folder zips contain a "/" entry that makes macOS
+  # unzip stop with an error. Files already unpacked with the right size are kept;
+  # the zip is deleted once every file is in place.
+  echo "Unpacking (checking every file)…"
+  "$VENV/bin/python" - "$ZIP" "$DATA" <<'PYCODE'
+import os, sys, zipfile
+archive, dest = sys.argv[1], os.path.realpath(sys.argv[2])
+with zipfile.ZipFile(archive) as z:
+    for info in z.infolist():
+        name = info.filename.lstrip('/')
+        target = os.path.realpath(os.path.join(dest, name))
+        if not name or not target.startswith(dest + os.sep):
+            continue                      # the "/" entry, or anything outside the folder
+        if info.is_dir():
+            os.makedirs(target, exist_ok=True); continue
+        if os.path.exists(target) and os.path.getsize(target) == info.file_size:
+            continue
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with z.open(info) as src, open(target, 'wb') as out:
+            while chunk := src.read(1 << 20):
+                out.write(chunk)
+        if os.path.getsize(target) != info.file_size:
+            sys.exit(f'Incomplete file after unpacking: {name}')
+for z in [n for n in os.listdir(dest) if n.endswith('.zip') and n != os.path.basename(archive)]:
+    zipfile.ZipFile(os.path.join(dest, z)).extractall(dest)   # nested zips, if any
+print('All files unpacked.')
+PYCODE
+  rm -f "$ZIP"
 fi
 DB="$(find_db)"
 [[ -n "$DB" ]] || { echo "The database download does not contain all_cdms_final_official.csv."; exit 1; }
