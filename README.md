@@ -103,20 +103,43 @@ No redistribution license for the project's original code has been selected yet.
 
 ## Local web interface
 
+### Starting and stopping (macOS)
+
+Double-click **CON Line Search.app** in the project folder. It starts the app in
+the background and opens it in your browser once it is ready; no terminal window
+needs to stay open. You can drag it to the Dock. A copy in /Applications also
+works once the app has been started from the project folder.
+
+- If the app is already running, the icon asks whether to **Open** or **Stop** it.
+- **Start app.command** does the same in a Terminal window and shows progress.
+  **Stop app.command** stops the app.
+- On the first start, a missing `.venv` is created with Python 3.12 or newer, and
+  `requirements-ui.txt` is installed (a few minutes, needs internet). Starting
+  from the app icon opens Terminal for this step so you can follow it.
+- Install SoFiA 2 separately (see Setup) and place the compiled `sofia` executable
+  in `.local-tools/`, or set `SOFIA_EXECUTABLE`. Without it the app opens, but
+  detection is unavailable.
+
+The same launcher works from a shell on macOS or Linux:
+
+```sh
+scripts/launch.sh start    # set up if needed, start in the background, open the browser
+scripts/launch.sh open     # open the running app
+scripts/launch.sh stop
+scripts/launch.sh status   # exit code 0 if running
+```
+
+The server log is `.local-tools/app.log`. `CONLINES_PORT` changes the port
+(default 8501). The address `http://127.0.0.1:8501` points to your own computer,
+so it works only while the app is running; after a restart, start it again.
+
+To run in the foreground instead:
+
 ```sh
 source .venv/bin/activate
 python -m pip install -r requirements-ui.txt
-# Put the compiled SoFiA executable on PATH, or set SOFIA_EXECUTABLE.
 python -m streamlit run app.py
 ```
-
-On macOS, after installing `requirements-ui.txt` in `.venv`, you can also
-double-click **Start app.command**. It uses the project environment and, when
-present, `.local-tools/sofia` (otherwise configure SoFiA as above). Keep its
-terminal open while using the app. The address `http://127.0.0.1:8501` points to
-your own computer: it works only while the server is running. After quitting the
-server or restarting the computer, launch it again. Keep the environment and
-SoFiA executable in persistent folders rather than a temporary directory.
 
 Open http://127.0.0.1:8501. Cubes stay local. The interface now uses the real
 ESPADA/SoFiA 3D finder first, followed by **live Splatalogue only** for identification.

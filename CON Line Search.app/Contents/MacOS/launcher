@@ -1,0 +1,31 @@
+#!/bin/bash
+# CON Line Search.app: start the app (or offer Open/Stop if it is already running).
+# The app bundle lives in the con-line-search folder; a copy elsewhere (for
+# example in /Applications) finds the folder recorded by scripts/launch.sh.
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+here="$(cd -- "$(dirname -- "$0")/../../.." && pwd)"
+if [[ ! -x "$here/scripts/launch.sh" ]]; then
+  here="$(cat "$HOME/Library/Application Support/con-line-search/project-folder" 2>/dev/null)"
+fi
+alert() {
+  osascript -e "display alert \"CON Line Search\" message \"$(printf '%s' "$1" | tr '"' "'")\"" >/dev/null 2>&1
+}
+if [[ -z "$here" || ! -x "$here/scripts/launch.sh" ]]; then
+  alert "Cannot find the con-line-search folder. Open it and double-click 'Start app.command' once."
+  exit 1
+fi
+launch="$here/scripts/launch.sh"
+if "$launch" status; then
+  choice="$(osascript -e 'button returned of (display dialog "CON Line Search is already running." buttons {"Stop", "Open"} default button "Open" with title "CON Line Search")' 2>/dev/null)"
+  if [[ "$choice" == "Stop" ]]; then "$launch" stop >/dev/null; else "$launch" open >/dev/null; fi
+  exit 0
+fi
+if [[ ! -x "$here/.venv/bin/python" ]]; then
+  # First start installs packages: show the progress in Terminal.
+  open -a Terminal "$here/Start app.command"
+  exit 0
+fi
+if ! output="$("$launch" start 2>&1)"; then
+  alert "The app could not start. $(printf '%s' "$output" | tail -n 6)"
+  exit 1
+fi
