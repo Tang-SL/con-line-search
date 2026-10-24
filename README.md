@@ -116,7 +116,10 @@ home-made, unsigned app from reading files in Documents, while Terminal already
 has that access. The icon itself only checks, opens and stops the app, so it
 needs no folder access.
 
-- If the app is already running, the icon asks whether to **Open** or **Stop** it.
+- If the app is already running, the icon asks whether to **Open**, **Restart** or **Stop** it.
+  Restart after pulling or switching branches: Streamlit keeps the helper modules it
+  imported at start, so an old server would mix old and new code. `Start app.command`
+  and `scripts/launch.sh start` detect changed code and restart automatically.
 - **Start app.command** does the same in a Terminal window and shows progress.
   **Stop app.command** stops the app.
 - On the first start, a missing `.venv` is created with Python 3.12 or newer, and

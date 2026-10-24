@@ -25,8 +25,11 @@ stop_server() {
 }
 
 if healthy; then
-  choice="$(osascript -e 'button returned of (display dialog "CON Line Search is running." buttons {"Stop", "Open"} default button "Open" with title "CON Line Search")' 2>/dev/null)"
-  if [[ "$choice" == "Stop" ]]; then
+  choice="$(osascript -e 'button returned of (display dialog "CON Line Search is running. Restart it after updating the code." buttons {"Stop", "Restart", "Open"} default button "Open" with title "CON Line Search")' 2>/dev/null)"
+  if [[ "$choice" == "Restart" ]]; then
+    stop_server
+    open -a Terminal "$here/Start app.command" 2>/dev/null || { [[ -n "$saved" ]] && open -a Terminal "$saved/Start app.command"; }
+  elif [[ "$choice" == "Stop" ]]; then
     stop_server || osascript -e 'display alert "CON Line Search" message "Could not stop the app. Double-click Stop app.command in the project folder."' >/dev/null 2>&1
   elif [[ "$choice" == "Open" ]]; then
     open "$URL"

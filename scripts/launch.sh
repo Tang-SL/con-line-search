@@ -17,6 +17,7 @@ STATE="$ROOT/.local-tools"
 LOG="$STATE/app.log"
 PIDFILE="$STATE/app.pid"
 PY="$ROOT/.venv/bin/python"
+STAMP="$STATE/app.code-stamp"
 mkdir -p "$STATE"
 
 say() { printf '%s\n' "$*"; }
@@ -80,6 +81,20 @@ sofia_check() {
   fi
 }
 
+code_stamp() {
+  # Changes whenever the app's Python code changes (pulls, branch switches, edits).
+  "$PY" - "$ROOT" <<'PYCODE' 2>/dev/null
+import hashlib, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+files = [root/'app.py', *sorted((root/'conlines').rglob('*.py'))]
+h = hashlib.sha256()
+for f in files:
+    if f.exists():
+        h.update(str(f.relative_to(root)).encode()); h.update(f.read_bytes())
+print(h.hexdigest())
+PYCODE
+}
+
 running_pid() {
   local pid
   [[ -f "$PIDFILE" ]] || return 1
@@ -90,8 +105,14 @@ running_pid() {
 start() {
   remember_location
   if healthy; then
-    say "The app is already running at $URL"
-    open_url; return 0
+    if [[ -x "$PY" && -f "$STAMP" && "$(cat "$STAMP")" == "$(code_stamp)" ]]; then
+      say "The app is already running at $URL"
+      open_url; return 0
+    fi
+    # Streamlit keeps imported modules in memory, so a server started before the
+    # code changed would mix old and new code. Restart it.
+    say "The running app was started with older code; restarting it."
+    stop || return 1
   fi
   setup || return 1
   sofia_check
@@ -103,6 +124,7 @@ start() {
         > "$LOG" 2>&1 < /dev/null &
   local pid=$!
   printf '%s\n' "$pid" > "$PIDFILE"
+  code_stamp > "$STAMP"
   disown "$pid" 2>/dev/null || true
   local i
   for i in $(seq 1 120); do
@@ -130,7 +152,7 @@ stop() {
     pid="$(lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null | head -n 1)"
     [[ -n "$pid" ]] && kill "$pid" 2>/dev/null
   fi
-  rm -f "$PIDFILE"
+  rm -f "$PIDFILE" "$STAMP"
   sleep 1
   if healthy; then say "Could not stop the app on port $PORT."; return 1; fi
   say "The app is stopped."
