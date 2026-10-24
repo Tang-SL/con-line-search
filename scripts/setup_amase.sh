@@ -10,6 +10,7 @@
 # computer has none. Re-running skips finished steps. Needs internet; the
 # downloads are large (PyTorch, RDKit and the AMASE database).
 set -euo pipefail
+export GIT_PAGER=cat PAGER=cat   # never stop in a pager (git log would open less)
 ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd)"
 TOOLS="$ROOT/.local-tools"
 SRC="$TOOLS/astro_amase"
@@ -38,7 +39,7 @@ step "2/5 Astro AMASE source"
 if [[ -d "$SRC/.git" ]]; then git -C "$SRC" pull -q --ff-only || echo "(could not update; using the existing copy)"
 else git clone -q --depth 1 https://github.com/zfried/astro_amase "$SRC"
 fi
-git -C "$SRC" log -1 --format='commit %h (%ad)' --date=short
+git --no-pager -C "$SRC" log -1 --format='commit %h (%ad)' --date=short
 
 step "3/5 Python 3.11 environment and packages (several minutes the first time)"
 # uv's own Python builds include Tk; group_selfies (an AMASE dependency) imports
