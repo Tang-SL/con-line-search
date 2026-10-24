@@ -1,6 +1,6 @@
 """Local, multi-SPW aperture spectroscopy workbench. Run with streamlit run app.py."""
 from pathlib import Path
-import hashlib, io, json, zipfile, os
+import hashlib, io, json, zipfile, os, sys, subprocess
 from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
@@ -326,10 +326,26 @@ elif method=='admit':
         revision=identifications['queried_utc']+'|admit|'+digest([admit_width,admit_exotics,admit_recomb])
 elif method=='amase':
     with st.expander('Astro AMASE settings',expanded=not st.session_state.get('amase')):
-        st.caption('Install Astro AMASE in its own environment (see README: “Astro AMASE”) and download its database files. The paths can also come from the AMASE_PYTHON and AMASE_DATA environment variables.')
+        # Fill empty path fields from the setup script's record (or AMASE_PYTHON/AMASE_DATA).
+        if not st.session_state.get('amase_python'):st.session_state['amase_python']=amase_bridge.default_python()
+        if not st.session_state.get('amase_data'):st.session_state['amase_data']=amase_bridge.default_data_dir()
+        problems=amase_bridge.check_installation(st.session_state['amase_python'],st.session_state['amase_data'])
+        if problems:
+            st.warning('Astro AMASE is not ready: '+' '.join(problems))
+            setup_script=ROOT/'Set up Astro AMASE.command'
+            a,b=st.columns([1,2])
+            if sys.platform=='darwin':
+                if a.button('Set up Astro AMASE…',help='Opens Terminal and installs Astro AMASE, a private Python 3.11 and its database into .local-tools/ (large downloads, several minutes).'):
+                    subprocess.Popen(['open','-a','Terminal',str(setup_script)])
+                    st.info('Setup is running in Terminal. When it says “Done”, press “Use installed Astro AMASE”.')
+            else:
+                a.code(f'"{ROOT/"scripts"/"setup_amase.sh"}"',language='sh')
+            def reload_paths():st.session_state.update(amase_python=amase_bridge.default_python(),amase_data=amase_bridge.default_data_dir())
+            b.button('Use installed Astro AMASE',on_click=reload_paths,help='Reads the paths recorded by the setup.')
+        else:st.caption('Astro AMASE is installed. Paths can also come from the AMASE_PYTHON and AMASE_DATA environment variables.')
         a,b=st.columns(2)
-        amase_python=a.text_input('Astro AMASE Python executable',value=amase_bridge.default_python(),key='amase_python')
-        amase_data=b.text_input('Astro AMASE database folder',value=amase_bridge.default_data_dir(),key='amase_data')
+        amase_python=a.text_input('Astro AMASE Python executable',key='amase_python')
+        amase_data=b.text_input('Astro AMASE database folder',key='amase_data')
         a,b,c,d=st.columns(4)
         amase_temperature=a.number_input('Excitation temperature (K)',3.,2000.,150.,step=10.,help='AMASE uses one temperature for all molecules.')
         amase_refine=b.checkbox('Let AMASE refine v_sys and T_ex',False,help='Off: v_sys from the redshift, T_ex fixed. On: AMASE searches ±250 km/s and ±100 K.')

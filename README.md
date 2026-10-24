@@ -348,22 +348,25 @@ tentative until you review them, and detection reliability applies to all three.
 
 #### Setting up Astro AMASE
 
-AMASE pins different numpy/scipy/astropy versions, so give it its own environment:
+In Step 4 › Astro AMASE settings, press **Set up Astro AMASE…**, or double-click
+**Set up Astro AMASE.command** in the project folder. It installs everything into
+`.local-tools/`, which is git-ignored:
 
-```sh
-conda create -n amase python=3.11 -y
-conda activate amase
-git clone https://github.com/zfried/astro_amase
-cd astro_amase && pip install -e .
-python -c "import sys; print(sys.executable)"   # copy this path
-```
+- the Astro AMASE source;
+- a private Python 3.11 environment (Astro AMASE cannot use 3.12: its
+  `astrochem_embedding` dependency needs `rdkit-pypi`, which has no 3.12 builds);
+- its database, from the Dropbox link in the AMASE README.
 
-Then download the AMASE database folder from the Dropbox link in its README.
-The first run also downloads the chemical-embedding model weights.
+It uses uv, which supplies Python 3.11 with Tk support. Tk is needed because the
+`group_selfies` dependency imports `tkinter`.
 
-In Step 4, enter the Python path and the database folder, or set the
-`AMASE_PYTHON` and `AMASE_DATA` environment variables. The app remembers the
-paths in `.local-tools/amase_paths.json`, which is git-ignored.
+The downloads (PyTorch, RDKit, the database) are large and take several minutes.
+When Terminal says “Done”, press **Use installed Astro AMASE** and the paths fill in.
+Re-running the setup skips finished steps and updates the source.
+
+To use your own installation instead, enter its Python and database folder, or set
+`AMASE_PYTHON` and `AMASE_DATA`. The folder must contain
+`all_cdms_final_official.csv` and `cdms_pkl/`.
 
 Each run takes minutes, so it starts only when you press **Run Astro AMASE**.
 The interactive AMASE fit can be downloaded from Step 4, and the run settings

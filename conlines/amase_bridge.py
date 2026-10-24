@@ -63,12 +63,27 @@ def build_spectrum(parts, sign=1.):
     return f[order], t[order], dict(sorted(rms.items()))
 
 
+def check_installation(python, data_dir):
+    """Plain-language problems with the AMASE paths; empty when ready to run."""
+    problems = []
+    if not python:
+        problems.append('No Astro AMASE Python is set.')
+    elif not Path(python).exists():
+        problems.append(f'The Python {python} does not exist.')
+    if not data_dir:
+        problems.append('No database folder is set.')
+    elif not (Path(data_dir)/'all_cdms_final_official.csv').exists():
+        problems.append(f'{data_dir} does not contain the AMASE database (all_cdms_final_official.csv).')
+    elif not (Path(data_dir)/'cdms_pkl').is_dir():
+        problems.append(f'{data_dir} is missing the cdms_pkl folder of the AMASE database.')
+    return problems
+
+
 def run(python, data_dir, frequency_MHz, intensity_K, params, workdir=None, timeout=7200):
     """Write the spectrum, call the runner in AMASE's environment, return its summary."""
-    if not python or not Path(python).exists():
-        raise ValueError('Set the Astro AMASE Python executable (the python of the environment where astro_amase is installed).')
-    if not data_dir or not Path(data_dir).is_dir():
-        raise ValueError('Set the Astro AMASE database folder (the files from its Dropbox link).')
+    problems = check_installation(python, data_dir)
+    if problems:
+        raise ValueError('Astro AMASE is not ready: '+' '.join(problems)+' Use “Set up Astro AMASE…” in its settings.')
     workdir = Path(workdir or tempfile.mkdtemp(prefix='conlines-amase-'))
     workdir.mkdir(parents=True, exist_ok=True)
     spectrum = workdir/'spectrum.txt'

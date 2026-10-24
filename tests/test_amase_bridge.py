@@ -24,7 +24,7 @@ def test_units_velocity_and_spectrum():
 
 def test_runner_end_to_end_with_stub(tmp_path, monkeypatch):
     monkeypatch.setenv('PYTHONPATH', str(STUB))
-    data = tmp_path/'db'; data.mkdir()
+    data = tmp_path/'db'; (data/'cdms_pkl').mkdir(parents=True); (data/'all_cdms_final_official.csv').write_text('x')
     f = np.linspace(100000., 100100., 101); t = np.exp(-((f-100050.)/3)**2)
     summary = B.run(sys.executable, data, f, t, dict(temperature=150., vlsr=0., rms_noise={(100000., 100100.): .01}), tmp_path/'run')
     assert summary['ok'] and summary['lines'][0]['status'] == 'assigned'
@@ -41,5 +41,8 @@ def test_runner_end_to_end_with_stub(tmp_path, monkeypatch):
 
 
 def test_missing_environment_is_reported(tmp_path):
-    with pytest.raises(ValueError, match='Python executable'):
+    with pytest.raises(ValueError, match='not ready'):
         B.run(tmp_path/'nope', tmp_path, [1.], [1.], {})
+    problems = B.check_installation(str(tmp_path/'nope'), str(tmp_path))
+    assert len(problems) == 2 and 'does not exist' in problems[0] and 'all_cdms_final_official.csv' in problems[1]
+    assert B.check_installation('', '') == ['No Astro AMASE Python is set.', 'No database folder is set.']
