@@ -96,7 +96,10 @@ start() {
   setup || return 1
   sofia_check
   say "Starting the app…"
-  nohup "$PY" -m streamlit run "$ROOT/app.py" --server.port "$PORT" --server.headless true \
+  # New session (setsid): closing the Terminal window that started it neither
+  # stops the server nor asks about running processes.
+  nohup "$PY" -c 'import os, sys; os.setsid(); os.execv(sys.argv[1], sys.argv[1:])' \
+        "$PY" -m streamlit run "$ROOT/app.py" --server.port "$PORT" --server.headless true \
         > "$LOG" 2>&1 < /dev/null &
   local pid=$!
   printf '%s\n' "$pid" > "$PIDFILE"

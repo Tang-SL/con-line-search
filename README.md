@@ -105,17 +105,22 @@ No redistribution license for the project's original code has been selected yet.
 
 ### Starting and stopping (macOS)
 
-Double-click **CON Line Search.app** in the project folder. It starts the app in
-the background and opens it in your browser once it is ready; no terminal window
-needs to stay open. You can drag it to the Dock. A copy in /Applications also
-works once the app has been started from the project folder.
+Double-click **CON Line Search.app** in the project folder; you can also drag it
+to the Dock. A Terminal window opens and starts the app in the background, then
+your browser opens once the app is ready. You can close that window; the app keeps
+running. A copy in /Applications also works once the app has been started from
+the project folder.
+
+Starting goes through Terminal because macOS privacy protection stops a
+home-made, unsigned app from reading files in Documents, while Terminal already
+has that access. The icon itself only checks, opens and stops the app, so it
+needs no folder access.
 
 - If the app is already running, the icon asks whether to **Open** or **Stop** it.
 - **Start app.command** does the same in a Terminal window and shows progress.
   **Stop app.command** stops the app.
 - On the first start, a missing `.venv` is created with Python 3.12 or newer, and
-  `requirements-ui.txt` is installed (a few minutes, needs internet). Starting
-  from the app icon opens Terminal for this step so you can follow it.
+  `requirements-ui.txt` is installed (a few minutes, needs internet).
 - Install SoFiA 2 separately (see Setup) and place the compiled `sofia` executable
   in `.local-tools/`, or set `SOFIA_EXECUTABLE`. Without it the app opens, but
   detection is unavailable.

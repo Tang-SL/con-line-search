@@ -5,7 +5,8 @@
 cd -- "$(dirname -- "$0")" || exit 1
 if scripts/launch.sh start; then
   echo
-  echo "You can close this window. To stop the app, double-click 'Stop app.command'."
+  echo "The app keeps running after you close this window."
+  echo "To stop it, double-click 'Stop app.command' or the CON Line Search app."
   sleep 3
 else
   echo

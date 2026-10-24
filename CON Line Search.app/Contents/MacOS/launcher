@@ -1,31 +1,41 @@
 #!/bin/bash
-# CON Line Search.app: start the app (or offer Open/Stop if it is already running).
-# The app bundle lives in the con-line-search folder; a copy elsewhere (for
-# example in /Applications) finds the folder recorded by scripts/launch.sh.
+# CON Line Search.app
+#
+# macOS privacy protection usually stops a home-made app like this one from
+# reading files in ~/Documents (the project folder). So the app itself only
+# talks to the running server (checking, opening, stopping it over the local
+# port). Starting is handed to Terminal, which already has folder access, via
+# Start app.command. The server runs detached, so that window can be closed.
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+PORT="${CONLINES_PORT:-8501}"
+URL="http://127.0.0.1:${PORT}"
+# The project folder: the one containing this app, or (for a copy elsewhere,
+# such as /Applications) the folder recorded by the last start.
 here="$(cd -- "$(dirname -- "$0")/../../.." && pwd)"
-if [[ ! -x "$here/scripts/launch.sh" ]]; then
-  here="$(cat "$HOME/Library/Application Support/con-line-search/project-folder" 2>/dev/null)"
-fi
-alert() {
-  osascript -e "display alert \"CON Line Search\" message \"$(printf '%s' "$1" | tr '"' "'")\"" >/dev/null 2>&1
+saved="$(cat "$HOME/Library/Application Support/con-line-search/project-folder" 2>/dev/null)"
+
+healthy() { curl -fs --max-time 2 "$URL/_stcore/health" 2>/dev/null | grep -q ok; }
+
+stop_server() {
+  local pids
+  pids="$(lsof -ti "tcp:$PORT" -sTCP:LISTEN 2>/dev/null)"
+  [[ -n "$pids" ]] && kill $pids 2>/dev/null
+  for _ in 1 2 3 4 5 6 7 8 9 10; do healthy || return 0; sleep 1; done
+  return 1
 }
-if [[ -z "$here" || ! -x "$here/scripts/launch.sh" ]]; then
-  alert "Cannot find the con-line-search folder. Open it and double-click 'Start app.command' once."
-  exit 1
-fi
-launch="$here/scripts/launch.sh"
-if "$launch" status; then
-  choice="$(osascript -e 'button returned of (display dialog "CON Line Search is already running." buttons {"Stop", "Open"} default button "Open" with title "CON Line Search")' 2>/dev/null)"
-  if [[ "$choice" == "Stop" ]]; then "$launch" stop >/dev/null; else "$launch" open >/dev/null; fi
+
+if healthy; then
+  choice="$(osascript -e 'button returned of (display dialog "CON Line Search is running." buttons {"Stop", "Open"} default button "Open" with title "CON Line Search")' 2>/dev/null)"
+  if [[ "$choice" == "Stop" ]]; then
+    stop_server || osascript -e 'display alert "CON Line Search" message "Could not stop the app. Double-click Stop app.command in the project folder."' >/dev/null 2>&1
+  elif [[ "$choice" == "Open" ]]; then
+    open "$URL"
+  fi
   exit 0
 fi
-if [[ ! -x "$here/.venv/bin/python" ]]; then
-  # First start installs packages: show the progress in Terminal.
-  open -a Terminal "$here/Start app.command"
-  exit 0
-fi
-if ! output="$("$launch" start 2>&1)"; then
-  alert "The app could not start. $(printf '%s' "$output" | tail -n 6)"
+
+if ! open -a Terminal "$here/Start app.command" 2>/dev/null && \
+   ! { [[ -n "$saved" ]] && open -a Terminal "$saved/Start app.command" 2>/dev/null; }; then
+  osascript -e 'display alert "CON Line Search" message "Cannot find the con-line-search folder. Open it and double-click Start app.command."' >/dev/null 2>&1
   exit 1
 fi
