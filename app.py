@@ -12,6 +12,7 @@ from conlines.solutions import cube_fingerprint, feature_fingerprint, digest
 from conlines.review_ui import identification_review
 from conlines.measurements import matching_frequency
 from conlines.evidence import add_evidence
+from conlines import admit_lineid, amase_bridge
 from conlines.reliability import channel_noise,component_properties,detection_reliability,neighbour_counts,identification_probabilities,chance_match_probability,anchor_statistics
 from astropy.wcs import WCS
 from conlines.core import read_cube,extract,query_catalogue,select_priors,moment,fits_bytes,C
@@ -267,15 +268,22 @@ edited=st.data_editor(pd.DataFrame(rows).style.apply(lambda row: ['background-co
 inspect=st.selectbox('Inspect feature',list(lookup),format_func=lambda ident:f"{ident} · {lookup[ident][1]['sign']}")
 k,q=lookup[inspect];st.plotly_chart(spectrum_plot(loaded[k]['cube'],extractions[k],analysis['results'][k],selected_id=inspect),width='stretch',key='inspect_'+inspect)
 
-st.subheader('4 · Identify features with live Splatalogue')
-st.caption('Matches use aperture centroids where measurable and remain sorted by absolute velocity offset. The evidence panel checks other transitions across the full loaded SPW coverage. Frequency compatibility and manual review do not establish a molecular identification.')
+st.subheader('4 · Identify features')
+methods={'Velocity likelihood (built-in)':'builtin','ADMIT LineID rules':'admit','Astro AMASE':'amase'}
+method_name=st.radio('Identification method',list(methods),horizontal=True,key='id_method',help='Built-in: closest transitions scored by velocity offset. ADMIT: the rule-based LineID of the ALMA Data Mining Toolkit. Astro AMASE: LTE line-pattern checks plus chemical relevance (Fried et al.).')
+method=methods[method_name]
+st.caption({'builtin':'Candidates within the match window, ranked by a velocity-offset probability against an “unidentified” alternative.',
+            'admit':'ADMIT’s LineID rules, ported: its Tier 1 list of bright common lines first (±40 km/s, or ±300 km/s when the systemic velocity exceeds 150 km/s), then catalogue lines inside each feature narrowed to one by lowest upper-state energy, molecular mass, isotopologue and line-strength rules. Uses the live Splatalogue rows of the selected astronomical filters without the energy or Einstein A screens; Hot Cores plus Extragalactic is closest to ADMIT’s full catalogue.',
+            'amase':'Astro AMASE runs on the aperture spectrum in its own Python environment, with its own CDMS/JPL catalogues: LTE simulation of each candidate, checks that its other strong lines are present and none is predicted too strong, and chemical relevance to molecules already assigned. Absorption features are analysed in a separate run on the sign-flipped spectrum.'}[method]+' All suggestions stay tentative until reviewed.')
 include_provisional=st.checkbox('Also match provisional features',True)
+targets={k:[q for q in features if (q['significant'] or include_provisional) and passes_reliability(q['id'])] for k,features in analysis['results'].items()}
 # The live query depends only on the cubes' frequency coverage and catalogue settings.
 # Matches are recomputed from that query for the current aperture features, so
 # moving the aperture never needs a new catalogue request.
 catalogue_settings=dict(datasets=sorted(v['fingerprint'] for v in loaded.values()),z=z,tolerance=halfwidth,filters=selected_filters,energy=energy,exclude=exclude,min_log_a=min_log_a,exclude_multiple=exclude_multiple,exclude_excited=exclude_excited)
 catalogue_signature=digest(catalogue_settings)
-match_settings=dict(catalogue_settings,detection=signature,include_provisional=include_provisional,companion_tolerance=companion_tolerance,linked_apertures=linked)
+match_settings=dict(catalogue_settings,detection=signature,include_provisional=include_provisional,companion_tolerance=companion_tolerance,linked_apertures=linked,method=method)
+if method=='amase':st.caption('Splatalogue is optional with Astro AMASE: it only feeds the companion-line evidence panel.')
 if st.button('Match features with live Splatalogue',disabled=not selected_filters):
     audits={};catalogues={};selected_catalogues={};query_status=[]
     for k,item in loaded.items():
@@ -291,43 +299,122 @@ if st.button('Match features with live Splatalogue',disabled=not selected_filter
 identifications=st.session_state.get('identifications')
 if identifications and identifications['signature']!=catalogue_signature:
     st.info('Identification settings changed. Fetch live matches again. Feature detections remain valid.');identifications=None
-matches={}
-if identifications:
-    for k,features in analysis['results'].items():
-        if k not in identifications['selected']:continue
-        targets=[q for q in features if (q['significant'] or include_provisional) and passes_reliability(q['id'])]
-        matches.update(match_features(targets,identifications['selected'][k],z,halfwidth))
-    matches=add_evidence(matches,lookup,identifications['selected'],loaded,z,companion_tolerance,linked,analysis['results'])
-# Identification probabilities: which transition, given that the feature is real.
-store=st.session_state.get('assignments_by_feature',{})
-anchor_offsets=[]
-for ident,(k,q) in lookup.items():
-    a=store.get(feature_keys[ident])
-    if a and a.get('reviewed') and a.get('transition') and q['significant'] and (scores.get(ident,{}).get('reliability') or 0)>=min_reliability:
-        anchor_offsets.append(C*(1-matching_frequency(q)/(a['transition']['rest_GHz']/(1+z))))
-anchors=anchor_statistics(anchor_offsets)
-st.session_state.setdefault('id_sigma',30.);st.session_state.setdefault('id_mean',0.)
-def use_anchors():st.session_state.update(id_sigma=round(max(anchors['sigma_kms'],5.),1),id_mean=round(anchors['mean_kms'],1))
-a,b,c=st.columns([1,1,1.4])
-id_sigma=a.number_input('Line velocity scatter σ (km/s)',5.,500.,step=5.,key='id_sigma',help='Spread of true lines around the systemic velocity, before adding each centroid error.')
-id_mean=b.number_input('Mean velocity offset (km/s)',-500.,500.,step=5.,key='id_mean',help='Corrects a systematic offset, for example from the redshift or reference frame.')
-if anchors:
-    c.caption(f"{anchors['n']} reviewed, significant and reliable anchor lines: mean offset {anchors['mean_kms']:+.1f} km/s, scatter {anchors['sigma_kms']:.1f} km/s.")
-    c.button('Use anchor calibration',on_click=use_anchors,disabled=anchors['n']<3,help='Needs at least three anchors.')
-else:c.caption('Review a few secure lines to calibrate σ and the mean offset from your own data.')
-match_settings.update(region_radius_arcsec=region_radius,min_reliability=min_reliability,include_low_reliability=include_low,id_sigma_kms=id_sigma,id_mean_kms=id_mean)
+matches={};method_suggestions=None;method_notes={};revision=identifications['queried_utc'] if identifications else None
+def channel_bounds(k,q):
+    f=loaded[k]['cube'].frequency;half=abs(f[1]-f[0])/2
+    return float(min(f[q['lo']],f[q['hi']])-half),float(max(f[q['lo']],f[q['hi']])+half)
+if method=='builtin' and identifications:
+    for k,features in targets.items():
+        if k in identifications['selected']:matches.update(match_features(features,identifications['selected'][k],z,halfwidth))
+elif method=='admit':
+    with st.expander('ADMIT settings',expanded=False):
+        a,b,c=st.columns(3)
+        admit_width=a.number_input('Tier 1 window (km/s; 0 = ADMIT default)',0.,1000.,0.,step=10.,help='ADMIT default: 40 km/s, or 300 km/s when |v_sys| > 150 km/s.')
+        admit_exotics=b.checkbox('Allow exotic atoms (Al, Cl, Mg, Mn, F, Li, Na, K, Ti)',False)
+        admit_recomb=c.selectbox('Recombination lines',['shallow','off','deep'],help='shallow: H and He α/β only; deep: all.')
+    match_settings.update(admit_tier1_width_kms=admit_width,admit_allow_exotics=admit_exotics,admit_recombination=admit_recomb)
+    if identifications:
+        method_suggestions={}
+        for k,features in targets.items():
+            if k not in identifications['catalogues'] or not features:continue
+            f=loaded[k]['cube'].frequency
+            feats=[dict(id=q['id'],spw=k,sign=q['sign'],centre_GHz=matching_frequency(q),lo_GHz=channel_bounds(k,q)[0],hi_GHz=channel_bounds(k,q)[1]) for q in features]
+            for ident,r in admit_lineid.identify(feats,identifications['catalogues'][k],z,{k:(float(min(f)),float(max(f)))},None,admit_width or None,admit_exotics,admit_recomb).items():
+                rows=[dict(c,method_label=('ADMIT choice: '+r['rule']) if i==0 and r['winner'] is not None else ('ADMIT blend' if c in r['blends'] else 'ADMIT candidate')) for i,c in enumerate(r['candidates'])]
+                matches[ident]=rows;method_suggestions[ident]=rows[0] if r['winner'] is not None else None
+                method_notes[ident]=('ADMIT: '+'; '.join(r['notes'][:3])) if r['winner'] is not None else 'ADMIT: U (no catalogue line inside the feature)'
+        revision=identifications['queried_utc']+'|admit|'+digest([admit_width,admit_exotics,admit_recomb])
+elif method=='amase':
+    with st.expander('Astro AMASE settings',expanded=not st.session_state.get('amase')):
+        st.caption('Install Astro AMASE in its own environment (see README: “Astro AMASE”) and download its database files. The paths can also come from the AMASE_PYTHON and AMASE_DATA environment variables.')
+        a,b=st.columns(2)
+        amase_python=a.text_input('Astro AMASE Python executable',value=amase_bridge.default_python(),key='amase_python')
+        amase_data=b.text_input('Astro AMASE database folder',value=amase_bridge.default_data_dir(),key='amase_data')
+        a,b,c,d=st.columns(4)
+        amase_temperature=a.number_input('Excitation temperature (K)',3.,2000.,150.,step=10.,help='AMASE uses one temperature for all molecules.')
+        amase_refine=b.checkbox('Let AMASE refine v_sys and T_ex',False,help='Off: v_sys from the redshift, T_ex fixed. On: AMASE searches ±250 km/s and ±100 K.')
+        amase_sigma=c.number_input('AMASE peak threshold (σ)',3.,20.,5.,step=.5)
+        amase_signs=d.selectbox('Analyse',['Emission and absorption','Emission only','Absorption only'])
+        a,b,c=st.columns([1.2,1,1])
+        amase_atoms=a.multiselect('Allowed elements',['C','H','O','N','S','Si','P','Cl','Na','Mg','Al','K','Fe'],default=['C','H','O','N','S'],help='AMASE default is C, H, O, N, S. Add Si for SiO and its isotopologues.')
+        amase_size=b.number_input('Source size (arcsec; 0 = fills the beam)',0.,100.,0.,step=.05)
+        amase_timeout=c.number_input('Time limit per run (min)',1,600,120)
+        amase_seeds=st.text_input('Known molecules to seed chemical relevance (SMILES, comma-separated)',value='',help="AMASE's hot-core suggestion: [C-]#[O+], CO, CCO, C=O, COC=O, CC#N, CC(C)=O")
+    v_sys=amase_bridge.radio_velocity(z)
+    ref_cube=loaded[reference]['cube']
+    amase_params=dict(temperature=float(amase_temperature),sigma_threshold=float(amase_sigma),observation_type='interferometric',
+                      beam_major_axis=float(ref_cube.header['BMAJ']*3600),beam_minor_axis=float(ref_cube.header['BMIN']*3600),
+                      source_size=float(amase_size) if amase_size>0 else 1e20,valid_atoms=list(amase_atoms),overwrite_old_files=True)
+    if amase_refine:amase_params.update(vlsr_range=[v_sys-250,v_sys+250],temperature_is_exact=False)
+    else:amase_params.update(vlsr=v_sys)
+    seeds=[x.strip() for x in amase_seeds.split(',') if x.strip()]
+    if seeds:amase_params['known_molecules']=seeds
+    signs={'Emission and absorption':['Emission','Absorption'],'Emission only':['Emission'],'Absorption only':['Absorption']}[amase_signs]
+    amase_signature=amase_bridge.signature(signature,amase_params,signs,sorted(extractions))
+    match_settings.update(amase_params=amase_params,amase_signs=signs)
+    st.caption(f'Systemic velocity passed to AMASE: {v_sys:.1f} km/s (radio convention, equivalent to z = {z:.7f}).')
+    if st.button('Run Astro AMASE',type='primary',disabled=not extractions):
+        summaries={};errors=[]
+        amase_bridge.remember_paths(amase_python,amase_data)
+        parts=[dict(frequency_GHz=loaded[k]['cube'].frequency,spectrum=ex['spectrum'],noise=ex['noise'],unit=loaded[k]['cube'].unit,bmaj_arcsec=loaded[k]['cube'].header['BMAJ']*3600,bmin_arcsec=loaded[k]['cube'].header['BMIN']*3600) for k,ex in extractions.items()]
+        for sign in signs:
+            try:
+                freq,intensity,rms=amase_bridge.build_spectrum(parts,1. if sign=='Emission' else -1.)
+                with st.spinner(f'Running Astro AMASE on the {sign.lower()} spectrum… this can take several minutes.'):
+                    summaries[sign]=amase_bridge.run(amase_python,amase_data,freq,intensity,dict(amase_params,rms_noise=rms,save_name='conlines_'+sign.lower()+'_'+amase_signature[:8]),timeout=60*int(amase_timeout))
+            except Exception as e:errors.append(f'{sign}: {e}')
+        st.session_state['amase']=dict(signature=amase_signature,summaries=summaries,errors=errors,run_utc=datetime.now(timezone.utc).isoformat())
+    amase_run=st.session_state.get('amase')
+    if amase_run and amase_run['signature']!=amase_signature:
+        st.info('Aperture, detection or AMASE settings changed. Run Astro AMASE again.');amase_run=None
+    if amase_run:
+        for e in amase_run['errors']:st.error(e)
+        if amase_run['summaries']:
+            st.caption('Astro AMASE run: '+amase_run['run_utc']+' · '+', '.join(f"{s}: v_sys {r['vlsr']:.1f} km/s, T_ex {r['temperature']:.0f} K, FWHM {r['linewidth']:.1f} km/s, {len(r['lines'])} lines" for s,r in amase_run['summaries'].items()))
+            for s_,r in amase_run['summaries'].items():
+                files=r.get('output_files',{})
+                if files.get('interactive_plot') and Path(files['interactive_plot']).exists():
+                    st.download_button(f'Download AMASE {s_.lower()} fit (interactive HTML)',Path(files['interactive_plot']).read_bytes(),f'amase_{s_.lower()}_fit.html','text/html',key='amase_html_'+s_)
+        method_suggestions={}
+        channel={k:float(abs(v['cube'].frequency[1]-v['cube'].frequency[0])) for k,v in loaded.items()}
+        feats=[dict(id=q['id'],spw=k,sign=q['sign'],lo_GHz=channel_bounds(k,q)[0],hi_GHz=channel_bounds(k,q)[1]) for k,features in targets.items() for q in features]
+        for sign,summary in amase_run['summaries'].items():
+            for ident,r in amase_bridge.map_to_features(summary,feats,sign,channel).items():
+                matches[ident]=r['candidates'];method_suggestions[ident]=r['suggestion'];method_notes[ident]='AMASE: '+r['note']
+        revision='amase|'+amase_run['run_utc']
+if matches:matches=add_evidence(matches,lookup,identifications['selected'] if identifications else {},loaded,z,companion_tolerance,linked,analysis['results'])
 id_scores={}
-if identifications:
-    for ident,options in matches.items():
-        k,q=lookup[ident];measurement=q.get('aperture_measurement',{})
-        error=measurement.get('centroid_error_kms') if measurement.get('reliable') else None
-        probabilities,p_none=identification_probabilities([o['velocity_offset_kms'] for o in options],id_sigma,id_mean,halfwidth,error)
-        rel=scores.get(ident,{}).get('reliability')
-        for o,pr in zip(options,probabilities):o.update(id_probability=pr,combined_probability=rel*pr if rel is not None else None)
-        f=loaded[k]['cube'].frequency;low,high=float(min(f)),float(max(f));middle=(low+high)/2
-        coverage=(high-low)+2*halfwidth/C*middle
-        id_scores[ident]=dict(p_unidentified=p_none,chance=chance_match_probability(len(identifications['selected'].get(k,[])),coverage,matching_frequency(q),id_sigma,id_mean))
-    st.caption(f'Each candidate’s probability assumes the feature is real: Gaussian in velocity offset (mean {id_mean:+.0f} km/s, σ {id_sigma:.0f} km/s combined with the centroid error), against an “unidentified” alternative with the weight of one line spread over ±{halfwidth:.0f} km/s. Combined = detection reliability × identification probability. Chance match is the probability that at least one unrelated catalogue line lies within ±2σ at this catalogue density; when it is high, a match on its own means little.')
+if method=='builtin':
+    # Identification probabilities: which transition, given that the feature is real.
+    store=st.session_state.get('assignments_by_feature',{})
+    anchor_offsets=[]
+    for ident,(k,q) in lookup.items():
+        a=store.get(feature_keys[ident])
+        if a and a.get('reviewed') and a.get('transition') and q['significant'] and (scores.get(ident,{}).get('reliability') or 0)>=min_reliability:
+            anchor_offsets.append(C*(1-matching_frequency(q)/(a['transition']['rest_GHz']/(1+z))))
+    anchors=anchor_statistics(anchor_offsets)
+    st.session_state.setdefault('id_sigma',30.);st.session_state.setdefault('id_mean',0.)
+    def use_anchors():st.session_state.update(id_sigma=round(max(anchors['sigma_kms'],5.),1),id_mean=round(anchors['mean_kms'],1))
+    a,b,c=st.columns([1,1,1.4])
+    id_sigma=a.number_input('Line velocity scatter σ (km/s)',5.,500.,step=5.,key='id_sigma',help='Spread of true lines around the systemic velocity, before adding each centroid error.')
+    id_mean=b.number_input('Mean velocity offset (km/s)',-500.,500.,step=5.,key='id_mean',help='Corrects a systematic offset, for example from the redshift or reference frame.')
+    if anchors:
+        c.caption(f"{anchors['n']} reviewed, significant and reliable anchor lines: mean offset {anchors['mean_kms']:+.1f} km/s, scatter {anchors['sigma_kms']:.1f} km/s.")
+        c.button('Use anchor calibration',on_click=use_anchors,disabled=anchors['n']<3,help='Needs at least three anchors.')
+    else:c.caption('Review a few secure lines to calibrate σ and the mean offset from your own data.')
+    match_settings.update(id_sigma_kms=id_sigma,id_mean_kms=id_mean)
+    if identifications:
+        for ident,options in matches.items():
+            k,q=lookup[ident];measurement=q.get('aperture_measurement',{})
+            error=measurement.get('centroid_error_kms') if measurement.get('reliable') else None
+            probabilities,p_none=identification_probabilities([o['velocity_offset_kms'] for o in options],id_sigma,id_mean,halfwidth,error)
+            rel=scores.get(ident,{}).get('reliability')
+            for o,pr in zip(options,probabilities):o.update(id_probability=pr,combined_probability=rel*pr if rel is not None else None)
+            f=loaded[k]['cube'].frequency;low,high=float(min(f)),float(max(f));middle=(low+high)/2
+            coverage=(high-low)+2*halfwidth/C*middle
+            id_scores[ident]=dict(p_unidentified=p_none,chance=chance_match_probability(len(identifications['selected'].get(k,[])),coverage,matching_frequency(q),id_sigma,id_mean))
+        st.caption(f'Each candidate’s probability assumes the feature is real: Gaussian in velocity offset (mean {id_mean:+.0f} km/s, σ {id_sigma:.0f} km/s combined with the centroid error), against an “unidentified” alternative with the weight of one line spread over ±{halfwidth:.0f} km/s. Combined = detection reliability × identification probability. Chance match is the probability that at least one unrelated catalogue line lies within ±2σ at this catalogue density; when it is high, a match on its own means little.')
+match_settings.update(region_radius_arcsec=region_radius,min_reliability=min_reliability,include_low_reliability=include_low)
 st.session_state['identification_matches']=matches
 if identifications:
     st.caption('Live query time: '+identifications['queried_utc'])
@@ -336,8 +423,9 @@ if identifications:
     with st.expander('Catalogue filter audit'):
         st.json({k:a['reason_counts'] for k,a in identifications['audits'].items()})
         st.download_button('Download catalogue query and filter audit',json.dumps(identifications,indent=2),'live_catalogue_audit.json','application/json')
-review_scores={ident:dict(reliability=scores.get(ident,{}).get('reliability'),region=scores.get(ident,{}).get('region'),**id_scores.get(ident,{})) for ident in lookup}
-assignments,solution=identification_review(lookup,matches,solution_context,feature_keys,loaded,extractions,{r.ID:(int(r.Start),int(r.End)) for _,r in edited.iterrows()},dict(queried_utc=identifications['queried_utc'],settings=match_settings) if identifications else None,identifications['queried_utc'] if identifications else None,Path(os.environ.get('CONLINES_SOLUTION_DIR',ROOT/'solutions')),scores=review_scores,review_ids=[i for i in lookup if passes_reliability(i)])
+review_scores={ident:dict(reliability=scores.get(ident,{}).get('reliability'),region=scores.get(ident,{}).get('region'),method_note=method_notes.get(ident),**id_scores.get(ident,{})) for ident in lookup}
+provenance=dict(queried_utc=identifications['queried_utc'] if identifications else None,method=method,settings=match_settings) if (identifications or method_suggestions is not None) else None
+assignments,solution=identification_review(lookup,matches,solution_context,feature_keys,loaded,extractions,{r.ID:(int(r.Start),int(r.End)) for _,r in edited.iterrows()},provenance,revision,Path(os.environ.get('CONLINES_SOLUTION_DIR',ROOT/'solutions')),scores=review_scores,review_ids=[i for i in lookup if passes_reliability(i)],suggestions=method_suggestions,method=method)
 
 st.subheader('5 · Make integrated maps')
 adopted_ids=st.multiselect('Adopt features for mapping',list(lookup),format_func=lambda ident:f"{ident} · {lookup[ident][1]['sign']}",key='adopt_'+signature)
@@ -348,7 +436,7 @@ baseline=st.selectbox('Map baseline subtraction',['linear','constant','none'],he
 choices={ident:assignments[ident]['transition'] for ident in adopted_ids}
 st.caption('Maps use the assignments from Step 4. Automatic suggestions remain tentative until reviewed; unidentified features can still be mapped.')
 if st.button('Generate maps & download bundle',type='primary'):
-    output=io.BytesIO();manifest=dict(detection=analysis,identifications=dict(identifications,matches=matches,settings=match_settings) if identifications else None,solution=solution,apertures=configs,map_preview_zoom=map_zoom,lines=[])
+    output=io.BytesIO();manifest=dict(detection=analysis,identifications=dict(identifications or {},matches=matches,settings=match_settings,method=method,amase=st.session_state.get('amase') if method=='amase' else None),solution=solution,apertures=configs,map_preview_zoom=map_zoom,lines=[])
     with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
         for _,r in adopted.iterrows():
             k,q=lookup[r.ID];cube=loaded[k]['cube'];line=choices[r.ID]

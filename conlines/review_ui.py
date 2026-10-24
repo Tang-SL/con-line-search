@@ -19,6 +19,8 @@ def evidence_panel(feature, chosen, members, loaded, extractions, ident, score=N
         st.write(f"Detection reliability: **{score['reliability']:.2f}** (catalogue-independent; from the off-source artefact rate).")
     elif score.get('region') == 'Control':
         st.warning('This component lies outside the source region, where the app treats components as the artefact control sample.')
+    if score.get('method_note'):
+        st.write(score['method_note'])
     if score.get('chance') is not None:
         st.caption(f"Chance that at least one unrelated catalogue line falls this close: {score['chance']:.0%}. Probability that the line is none of the listed transitions: {score.get('p_unidentified', 0):.0%}.")
     measurement=feature.get('aperture_measurement',{})
@@ -37,6 +39,12 @@ def evidence_panel(feature, chosen, members, loaded, extractions, ident, score=N
     if fresh_row.get('id_probability') is not None:
         combined = fresh_row.get('combined_probability')
         st.write(f"Identification probability (if real): **{fresh_row['id_probability']:.2f}**"+(f" · combined with detection reliability: **{combined:.2f}**" if combined is not None else ''))
+    if fresh_row.get('amase_global') is not None:
+        st.write(f"Astro AMASE scores: global **{fresh_row['amase_global']:.1f}** (threshold 93.5), local **{(fresh_row.get('amase_local') or 0):.2f}** (threshold 0.7); chemical relevance {(fresh_row.get('amase_structural') or 0):.1f}, frequency match {(fresh_row.get('amase_frequency') or 0):.3f}.")
+        if fresh_row.get('amase_penalties'):
+            st.caption('AMASE penalties: '+'; '.join(fresh_row['amase_penalties']))
+    elif fresh_row.get('method_label'):
+        st.caption(fresh_row['method_label'])
     st.caption(f"Catalogue: {chosen.get('catalogue') or 'not supplied'} · Species entry: {chosen.get('species_id') or 'not supplied'} · Upper energy: {chosen.get('Eu_K')} K · log₁₀ A: {chosen.get('log10_A_s')}. Energy and Einstein A alone do not predict observed brightness.")
     # Evidence is only taken from the current successful live request, never
     # from an assignment restored from a saved solution.
@@ -69,7 +77,7 @@ def evidence_panel(feature, chosen, members, loaded, extractions, ident, score=N
                 st.plotly_chart(fig,width='stretch',key='companionplot_'+ident)
 
 
-def identification_review(lookup,matches,context,feature_keys,loaded,extractions,intervals,provenance,revision,solution_dir,scores=None,review_ids=None):
+def identification_review(lookup,matches,context,feature_keys,loaded,extractions,intervals,provenance,revision,solution_dir,scores=None,review_ids=None,suggestions=None,method='builtin'):
     scores=scores or {}
     scope=digest(dict(context=context,feature_keys=feature_keys));state_key='solution_'+scope;ids=list(lookup)
     # Reviewed choices belong to a detected component (its feature key), not to an
@@ -80,7 +88,7 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
         st.session_state[state_key]=dict(assignments=suggest_assignments(ids,{},carried),cursor=None,revision=None,widget_revision=0,provenance=None)
     state=st.session_state[state_key]
     if revision and revision!=state['revision']:
-        state['assignments']=suggest_assignments(ids,matches,state['assignments'])
+        state['assignments']=suggest_assignments(ids,matches,state['assignments'],suggestions,method)
         state.update(revision=revision,provenance=provenance,widget_revision=state['widget_revision']+1)
     assignments=state['assignments']
     for ident,(k,q) in lookup.items():
@@ -89,7 +97,7 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
             line['velocity_offset_kms']=float(C*(1-matching_frequency(q)/(line['rest_GHz']/(1+context['redshift']))))
     if state['provenance']:
         st.caption('Assignment catalogue provenance: '+str(state['provenance'].get('queried_utc','saved solution'))+'. Reviewed choices are retained when live matches are refreshed.')
-    st.caption('Nearest-frequency matches are tentative suggestions. Review them here without returning to Step 3. A question mark on the plot means the assignment has not been manually reviewed.')
+    st.caption({'builtin':'Nearest-frequency matches','admit':'ADMIT choices','amase':'Astro AMASE assignments'}.get(method,'Suggestions')+' are tentative suggestions. Review them here without returning to Step 3. A question mark on the plot means the assignment has not been manually reviewed.')
     queue=[i for i in ids if review_ids is None or i in set(review_ids)]
     summary=[]
     for ident,(k,q) in lookup.items():
@@ -97,7 +105,7 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
         score=scores.get(ident,{})
         fresh=next((r for r in matches.get(ident,[]) if line is not None and transition_key(r)==transition_key(line)),{})
         probability=fresh.get('id_probability') if line is not None else (score.get('p_unidentified') if matches.get(ident) else None)
-        summary.append(dict(Feature=ident,SPW=loaded[k]['name'],Sign=q['sign'],Significant=q['significant'],Reliability=score.get('reliability'),Assignment=line['species'] if line else 'Unidentified',Rest_GHz=line['rest_GHz'] if line else None,Offset_kms=line.get('velocity_offset_kms') if line else None,P_assignment=probability,Combined=probability*score['reliability'] if probability is not None and score.get('reliability') is not None else None,Chance_match=score.get('chance'),Review='Reviewed' if a['reviewed'] else 'Tentative',In_review_queue=ident in queue))
+        summary.append(dict(Feature=ident,SPW=loaded[k]['name'],Sign=q['sign'],Significant=q['significant'],Reliability=score.get('reliability'),Assignment=line['species'] if line else 'Unidentified',Rest_GHz=line['rest_GHz'] if line else None,Offset_kms=line.get('velocity_offset_kms') if line else None,P_assignment=probability,Combined=probability*score['reliability'] if probability is not None and score.get('reliability') is not None else None,Chance_match=score.get('chance'),Method_note=score.get('method_note'),Review='Reviewed' if a['reviewed'] else 'Tentative',In_review_queue=ident in queue))
     st.dataframe(pd.DataFrame(summary),hide_index=True,width='stretch')
     reviewed=sum(assignments[i]['reviewed'] for i in queue)
     if queue:st.progress(reviewed/len(queue),text=f'{reviewed} of {len(queue)} features in the review queue manually reviewed')
@@ -119,7 +127,7 @@ def identification_review(lookup,matches,context,feature_keys,loaded,extractions
                 st.caption('The saved/current assignment is retained below. Fetch live matches to compare against the current catalogue filters.')
             selected=next((j for j,r in enumerate(members) if transition_key(r)==transition_key(current['transition'])),-1)
             choice_key=f'choice_{scope}_{state["widget_revision"]}_{ident}'
-            choice=st.selectbox('Identification choice',[-1,*range(len(members))],index=selected+1,format_func=lambda j:('Unidentified / no reliable assignment'+(f" · P {scores[ident]['p_unidentified']:.2f}" if matches.get(ident) and scores.get(ident,{}).get('p_unidentified') is not None else '')) if j==-1 else f"{members[j]['species']} · {members[j]['rest_GHz']:.7f} GHz · Δv {members[j].get('velocity_offset_kms',0):+.1f} km/s · {members[j].get('qns','')}"+(f" · P {members[j]['id_probability']:.2f}" if members[j].get('id_probability') is not None and members[j] in matches.get(ident,[]) else ''),key=choice_key)
+            choice=st.selectbox('Identification choice',[-1,*range(len(members))],index=selected+1,format_func=lambda j:('Unidentified / no reliable assignment'+(f" · P {scores[ident]['p_unidentified']:.2f}" if matches.get(ident) and scores.get(ident,{}).get('p_unidentified') is not None else '')) if j==-1 else f"{members[j]['species']} · {members[j]['rest_GHz']:.7f} GHz · Δv {members[j].get('velocity_offset_kms',0):+.1f} km/s · {members[j].get('qns','')}"+(f" · P {members[j]['id_probability']:.2f}" if members[j].get('id_probability') is not None and members[j] in matches.get(ident,[]) else '')+(f" · {members[j]['method_label']}" if members[j].get('method_label') and members[j] in matches.get(ident,[]) else ''),key=choice_key)
             chosen=members[choice] if choice>=0 else None
             fig=spectrum_plot(loaded[k]['cube'],extractions[k],[q],selected_id=ident)
             f=loaded[k]['cube'].frequency;left,right=sorted([f[q['lo']],f[q['hi']]])

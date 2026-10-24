@@ -230,3 +230,51 @@ def test_low_reliability_artefact_is_not_matched_or_reviewed(tmp_path,monkeypatc
     by_label(app.checkbox,'Also match and review low-reliability features').check().run()
     by_label(app.button,'Match features with live Splatalogue').click().run()
     assert artefact in app.session_state['identification_matches']
+
+
+def test_admit_method_suggests_its_choice(workbench,monkeypatch):
+    import conlines.core
+    app,_=workbench;features={q['sign']:q for q in next(iter(app.session_state['analysis']['results'].values()))}
+    z=by_label(app.number_input,'Redshift z').value
+    rest=features['Absorption']['frequency_GHz']*(1+z)
+    lines=[dict(species='CH3OH vt = 0-2',species_id=1,rest_GHz=rest,qns='a',Eu_K=300.,log10_A_s=-7.4,line_strength=2.,recommended='1',filters=['ism-hot-core']),
+           dict(species='30SiO v = 0',species_id=2,rest_GHz=rest+.0005,qns='4-3',Eu_K=20.3,log10_A_s=-3.6,line_strength=9.6,recommended='1',filters=['ism-hot-core'])]
+    monkeypatch.setattr(conlines.core,'query_catalogue',lambda *a:lines)
+    by_label(app.radio,'Identification method').set_value('ADMIT LineID rules').run()
+    by_label(app.button,'Match features with live Splatalogue').click().run()
+    assert not app.exception,app.exception
+    options=app.session_state['identification_matches'][features['Absorption']['id']]
+    assert options[0]['species']=='30SiO v = 0' and options[0]['method_label'].startswith('ADMIT choice: lowest upper-state energy')
+    by_label(app.button,'Review identifications one by one').click().run()
+    assert by_label(app.selectbox,'Identification choice').value==-1          # emission feature: ADMIT "U"
+    by_label(app.button,'Confirm & next').click().run()
+    assert by_label(app.selectbox,'Identification choice').value==0           # absorption feature: ADMIT's 30SiO
+
+
+def test_amase_method_maps_runs_by_sign(workbench,monkeypatch):
+    from conlines import amase_bridge
+    app,_=workbench;features={q['sign']:q for q in next(iter(app.session_state['analysis']['results'].values()))}
+    z=by_label(app.number_input,'Redshift z').value;v=amase_bridge.radio_velocity(z)
+    calls=[]
+    def fake_run(python,data,freq,intensity,params,timeout=None,**kw):
+        calls.append((params['save_name'],float(freq[np.argmax(intensity)])))
+        lines=[]
+        for sign,q in features.items():
+            f=q['frequency_GHz']*1000
+            cand=dict(formula=sign[:3]+'Mol',quantum_number='J',linelist='CDMS',catalog_frequency=f,global_score=97.,combined_score=.9,structural_score=99.,frequency_match_score=.98,penalties=[])
+            lines.append(dict(frequency_MHz=f,intensity=1.,status='assigned',best=cand,candidates=[cand]))
+        return dict(ok=True,vlsr=v,temperature=150.,linewidth=50.,lines=lines,kept_molecules=[],output_files={})
+    monkeypatch.setattr(amase_bridge,'run',fake_run)
+    monkeypatch.setattr(amase_bridge,'remember_paths',lambda *a,**k:None)
+    by_label(app.radio,'Identification method').set_value('Astro AMASE').run()
+    by_label(app.button,'Run Astro AMASE').click().run()
+    assert not app.exception and not app.error,[e.value for e in app.error]
+    assert [c[0].split('_')[1] for c in calls]==['emission','absorption']
+    # Each run peaks at its own sign's line: the absorption run sees the flipped (positive) absorption.
+    assert abs(calls[0][1]/1000-features['Emission']['frequency_GHz'])<.03
+    assert abs(calls[1][1]/1000-features['Absorption']['frequency_GHz'])<.03
+    matches=app.session_state['identification_matches']
+    assert matches[features['Emission']['id']][0]['species']=='EmiMol' and matches[features['Absorption']['id']][0]['species']=='AbsMol'
+    assert abs(matches[features['Absorption']['id']][0]['rest_GHz']-features['Absorption']['frequency_GHz']*(1+z))<1e-6
+    by_label(app.button,'Review identifications one by one').click().run()
+    assert by_label(app.selectbox,'Identification choice').value==0

@@ -269,6 +269,75 @@ that at least one unrelated catalogue line lies within ±2σ at the current cata
 density. Species priors, line-strength (LTE) companion predictions and width
 consistency are planned next; until then all candidates have equal prior weight.
 
+### Identification methods (Step 4)
+
+Choose one of three methods. Each one only suggests assignments, which stay
+tentative until you review them, and detection reliability applies to all three.
+
+- **Velocity likelihood (built-in):** the candidates within the match window,
+  ranked by a velocity-offset probability against an “unidentified”
+  alternative (see above).
+- **ADMIT LineID rules:** a port of the identification logic of ADMIT's
+  `LineID_AT` (ALMA Data Mining Toolkit, University of Maryland, MIT licence;
+  `conlines/admit_lineid.py`). The original needs CASA, so its rules are applied
+  to the ESPADA features:
+  1. ADMIT's Tier 1 list of bright, common lines (copied unchanged to
+     `conlines/data/admit_tier1_lines.list`) is matched first, within ±40 km/s,
+     or ±300 km/s when the systemic velocity exceeds 150 km/s.
+  2. Catalogue lines inside each remaining feature are filtered as ADMIT does:
+     NRAO-recommended entries with a line strength, no exotic atoms unless
+     allowed, and recombination lines limited.
+  3. The candidates are narrowed to one: drop rare isotopologues of heavier
+     molecules, take the lowest upper-state energy (unless a much lighter
+     species has a strong line), and pick the highest line strength. Other
+     entries of the same species at the same energy are listed as blends.
+  4. A feature with no candidate is unidentified ("U").
+
+  ADMIT's own line finding is not ported, nor its search for equally spaced
+  peaks from rotating sources. It uses the live Splatalogue rows of the selected
+  astronomical filters, without this app's energy and Einstein A screens; Hot
+  Cores plus Extragalactic is closest to ADMIT's full catalogue.
+- **Astro AMASE:** runs the real package (Fried et al., arXiv:2608.18221;
+  https://github.com/zfried/astro_amase) on the aperture spectrum, converted to K.
+  It does LTE simulation of each candidate, checks that its predicted strong
+  lines are present and none are predicted too strong, scores chemical relevance
+  to the molecules already assigned, and fits column densities at the end.
+  - Its line assignments are mapped to the ESPADA features they fall in.
+  - A molecule removed by AMASE's best-fit model is not suggested.
+  - Absorption features are analysed in a separate run on the sign-flipped
+    spectrum. For optically thin lines from one excitation temperature this
+    keeps the relative line strengths, but column densities and temperatures
+    from that run are not physical.
+  - The systemic velocity is passed as v = cz/(1+z), which is the radio
+    convention AMASE uses for frequency shifts. You can let AMASE refine it,
+    with T_ex, within ±250 km/s.
+  - AMASE assumes one T_ex, linewidth and velocity, and optically thin Gaussian
+    lines. Expect more false positives in line-confused CON spectra.
+  - Its default elements exclude Si; add it for SiO and its isotopologues.
+
+#### Setting up Astro AMASE
+
+AMASE pins different numpy/scipy/astropy versions, so give it its own environment:
+
+```sh
+conda create -n amase python=3.11 -y
+conda activate amase
+git clone https://github.com/zfried/astro_amase
+cd astro_amase && pip install -e .
+python -c "import sys; print(sys.executable)"   # copy this path
+```
+
+Then download the AMASE database folder from the Dropbox link in its README.
+The first run also downloads the chemical-embedding model weights.
+
+In Step 4, enter the Python path and the database folder, or set the
+`AMASE_PYTHON` and `AMASE_DATA` environment variables. The app remembers the
+paths in `.local-tools/amase_paths.json`, which is git-ignored.
+
+Each run takes minutes, so it starts only when you press **Run Astro AMASE**.
+The interactive AMASE fit can be downloaded from Step 4, and the run settings
+and results go into the export ZIP and the solution provenance.
+
 ### Catalogue filtering
 
 Default Extragalactic selection, Eu≤300 K, deuterated/trans species excluded,

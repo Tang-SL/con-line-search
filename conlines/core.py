@@ -135,6 +135,26 @@ def extract(cube, x, y, kind, radius, ratio=1., angle=0.):
     return dict(spectrum=spec,controls=controls,noise=noise,mask=mask,control_centers=centers,pixels=int(mask.sum()))
 
 
+def parse_splatalogue(data, filt, rows=None):
+    """Normalise Splatalogue basic-search rows; merge duplicates across filters."""
+    rows = {} if rows is None else rows
+    clean = lambda s: html.unescape(re.sub('<[^>]*>', '', s or '')).strip()
+    number = lambda v: float(v) if v not in (None, '') else None
+    for r in data:
+        if not r.get('species_id'):continue
+        freq=float(r['orderedFreq'].split(',')[0]);key=(r['species_id'],freq,clean(r['resolved_QNs']))
+        if key in rows:rows[key]['filters'].append(filt);continue
+        rows[key]=dict(species=clean(r['species_name']),species_id=r['species_id'],
+                       chemical_name=clean(r.get('chemical_name')),
+                       catalogue=clean(r.get('linelists')),recommended=r.get('nraorecommended'),
+                       frequency_text=clean(r['orderedFreq']),
+                       rest_GHz=freq,qns=clean(r['resolved_QNs']),
+                       Eu_K=number(r.get('euk')),El_K=number(r.get('elk')),
+                       log10_A_s=number(r.get('aij')),line_strength=number(r.get('sijmu2')),
+                       log10_intensity_300K=number(r.get('cdms_jpl_intensitys')),filters=[filt])
+    return rows
+
+
 def query_catalogue(low, high, filters):
     rows={}
     for filt in filters:
@@ -143,18 +163,7 @@ def query_catalogue(low, high, filters):
         response.raise_for_status();data=response.json()
         if not isinstance(data,list):raise ValueError('Unexpected Splatalogue response.')
         if len(data)==1 and data[0].get('searchErrorMessage') and not data[0].get('species_id'):raise ValueError(data[0]['searchErrorMessage'])
-        for r in data:
-            if not r.get('species_id'):continue
-            clean=lambda s:html.unescape(re.sub('<[^>]*>','',s or '')).strip()
-            freq=float(r['orderedFreq'].split(',')[0]);key=(r['species_id'],freq,clean(r['resolved_QNs']))
-            if key in rows:rows[key]['filters'].append(filt);continue
-            rows[key]=dict(species=clean(r['species_name']),species_id=r['species_id'],
-                           catalogue=clean(r.get('linelists')),recommended=r.get('nraorecommended'),
-                           frequency_text=clean(r['orderedFreq']),
-                           rest_GHz=freq,qns=clean(r['resolved_QNs']),
-                           Eu_K=float(r['euk']) if r.get('euk') else None,
-                           El_K=float(r['elk']) if r.get('elk') else None,
-                           log10_A_s=float(r['aij']) if r.get('aij') else None,filters=[filt])
+        parse_splatalogue(data,filt,rows)
     return list(rows.values())
 
 

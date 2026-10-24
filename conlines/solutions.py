@@ -30,7 +30,13 @@ def transition_key(row):
     return None if row is None else (row['species'],round(float(row['rest_GHz']),9),row.get('qns',''))
 
 
-def suggest_assignments(feature_ids,matches,previous=None):
+def suggest_assignments(feature_ids,matches,previous=None,preferred=None,method='nearest'):
+    """Keep reviewed choices; otherwise suggest the method's choice.
+
+    preferred: ident -> transition row (or None for 'unidentified') chosen by an
+    identification method such as ADMIT or AMASE. Without it, the closest
+    candidate in velocity is suggested.
+    """
     out={}
     for ident in feature_ids:
         options=matches.get(ident,[])
@@ -39,6 +45,10 @@ def suggest_assignments(feature_ids,matches,previous=None):
             out[ident]=copy.deepcopy(old)
             updated=next((r for r in options if transition_key(r)==transition_key(old['transition'])),None)
             if updated is not None:out[ident]['transition']=copy.deepcopy(updated)
+        elif preferred is not None:
+            choice=preferred.get(ident)
+            row=next((r for r in options if choice is not None and transition_key(r)==transition_key(choice)),None)
+            out[ident]=dict(transition=copy.deepcopy(row),reviewed=False,origin=method if row else 'unidentified')
         else:
             nearest=min(options,key=lambda r:abs(r['velocity_offset_kms'])) if options else None
             out[ident]=dict(transition=copy.deepcopy(nearest),reviewed=False,origin='nearest' if nearest else 'unidentified')
