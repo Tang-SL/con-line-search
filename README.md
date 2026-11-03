@@ -427,7 +427,10 @@ l=1f (≈400 km/s). The centroid of such a feature means nothing, so:
    double-peaked profiles at the nucleus), whichever fits better. So rotation does
    not leak flux into a blended neighbour. The velocity is searched within half
    the smallest separation between lines whose strengths are free there (tied
-   lines do not count), and strengths keep their sign. Other pixels use the
+   lines do not count), and strengths keep their sign. When features in several
+   spectral windows are fitted together, the gas has one velocity field: it is
+   measured first in the least ambiguous window and every window is then fitted
+   within ±30 km/s of it, pixel by pixel. Other pixels use the
    aperture shape, signed and unclipped. The bundle also holds maps of the
    per-pixel velocity, width and residual RMS. Lines closer than the velocity
    spread can only be split per pixel through a tie; the app warns when many
@@ -440,7 +443,10 @@ feature (channels 143–357) holds HCN 3–2 and HCN v₂=1 l=1e; SPW25's holds 
 3–2 and HCN v₂=1 l=1f. A joint two-Gaussian fit with l=1e tied to l=1f gives
 HCN v₂=1 ≈ 0.92 ± 0.09 Jy/beam km/s per l-component, ≈9% of HCN 3–2. Without the
 tie, HCN and HCN v₂=1 l=1e are flagged as not separable. The single-Gaussian fit
-fails (reduced χ² ≈ 11; the profile is double-peaked).
+fails (reduced χ² ≈ 11; the profile is double-peaked). The per-line maps follow a
+±200 km/s rotation field; HCN v₂=1 stays confined to the nucleus (its flux within
+0.8″ equals that within 0.32″), whereas with the aperture shape fixed in every pixel
+the rotation leaked HCO⁺ into an extended, positive/negative HCN v₂=1 pattern.
 
 Caveats: the shared shape is applied to every line, including ones that are not
 self-absorbed (vibrationally excited lines); uncertainties ignore channel
