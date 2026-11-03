@@ -333,3 +333,51 @@ def test_failed_search_is_shown_and_does_not_advance(tmp_path,monkeypatch):
     assert any('search failed' in e.value.lower() and 'test failure' in e.value for e in app.error)
     assert app.session_state['stage']==2
     assert not any(n.label=='Radius / half-width (arcsec)' for n in app.number_input)
+
+
+def test_blended_feature_fit_identification_and_per_line_maps(tmp_path,monkeypatch):
+    import io,zipfile
+    import conlines.core,conlines.espada_backend
+    c=synthetic();yy,xx=np.indices((81,81));source=np.exp(-((xx-40)**2+(yy-40)**2)/8)
+    chan=np.arange(65)
+    blend=.5*np.exp(-.5*((chan-30)/3.)**2)+.3*np.exp(-.5*((chan-34)/3.)**2)   # two lines, 4 channels apart
+    c.data[29:34]+=(.8*source).astype('float32')          # remove the base cube's absorption line
+    c.data[:]+=(blend[:,None,None]*source).astype('float32');c.data[0,0,0]+=.321     # unique cube (searches are cached)
+    path=tmp_path/'blend.fits';fits.writeto(path,c.data,c.header)
+    component=[dict(sofia_id=1,sign='Emission',lo=22,hi=42,x=40.,y=40.,frequency_GHz=float(c.frequency[32]),footprint=[40*81+40,40*81+41])]
+    monkeypatch.setattr(conlines.espada_backend,'run_espada',lambda *a,**kw:dict(components=component,status={},parameters={},console_log='blend'))
+    app=AppTest.from_file(str(ROOT/'app.py'),default_timeout=120).run()
+    load_and_find(app,str(path));to_identify(app)
+    z=by_label(app.number_input,'Redshift z').value
+    rows=[dict(species=name,rest_GHz=float(c.frequency[ch])*(1+z),qns='1-0',Eu_K=eu,log10_A_s=-4.,filters=['extragalactic'])
+          for name,ch,eu in [('LineA',30,10.),('LineB',34,20.),('Far',60,5.)]]
+    monkeypatch.setattr(conlines.core,'query_catalogue',lambda *a:rows)
+    click(app,'Search Splatalogue')
+    assert not app.exception,app.exception
+    click(app,'Review identifications one by one')
+    assert any(m.label=='Other lines blended in this feature' for m in app.multiselect)
+    click(app,'Fit the blend')
+    assert not app.exception and not app.error,[e.value for e in app.error]
+    fit=app.session_state['blend_last']['fit']
+    q={r['row']['species']:r for r in fit['components']}
+    assert set(q)=={'LineA','LineB'}                                # 'Far' is outside the feature
+    assert q['LineA']['verdict'].startswith('Needed') and q['LineB']['verdict'].startswith('Needed')
+    total=q['LineA']['amplitude']+q['LineB']['amplitude']
+    assert fit['reduced_chi2']<3 and abs(q['LineA']['amplitude']/total-.5/.8)<.1
+    click(app,'Use this fit as the identification')
+    ident=component and next(iter(app.session_state['analysis']['results'].values()))[0]['id']
+    scope=[k for k in app.session_state if str(k).startswith('solution_') and isinstance(app.session_state[k],dict) and 'assignments' in app.session_state[k]][0]
+    a=app.session_state[scope]['assignments'][ident]
+    assert a['reviewed'] and {a['transition']['species'],*[b['species'] for b in a['blend']]}=={'LineA','LineB'}
+    click(app,'Continue to maps →')
+    assert by_label(app.checkbox,'Also map each line of a blended feature separately (from its blend fit)').value
+    headers=[];original=conlines.core.fits_bytes
+    monkeypatch.setattr(conlines.core,'fits_bytes',lambda image,header:(headers.append((header.copy(),image)),original(image,header))[1])
+    click(app,'Generate maps & download bundle')
+    assert not app.exception and not app.error,[e.value for e in app.error]
+    by_line={h.get('LINEID'):(h,im) for h,im in headers}
+    assert {'LineA','LineB'}<=set(by_line) and by_line['LineA'][0]['IDSTAT']=='BLENDFIT'
+    assert any('BLENDED' in h for h,_ in headers)
+    # Per-line maps peak at the source and split the flux roughly as injected.
+    fa,fb=by_line['LineA'][1][40,40],by_line['LineB'][1][40,40]
+    assert fa>0 and fb>0 and abs(fa/(fa+fb)-.5/.8)<.15

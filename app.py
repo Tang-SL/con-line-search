@@ -17,7 +17,9 @@ from conlines.solutions import cube_fingerprint, feature_fingerprint, digest
 from conlines.review_ui import identification_review
 from conlines.measurements import matching_frequency
 from conlines.evidence import add_evidence
-from conlines import admit_lineid, amase_bridge
+from conlines import admit_lineid, amase_bridge, blends
+from conlines.blend_ui import blend_section
+from conlines.solutions import describe_assignment
 from conlines.reliability import channel_noise,component_properties,detection_reliability,neighbour_counts,identification_probabilities,chance_match_probability,anchor_statistics
 from astropy.wcs import WCS
 from conlines.core import read_cube,extract,query_catalogue,select_priors,moment,fits_bytes,C
@@ -372,6 +374,7 @@ with body:
         include_provisional=setting(a.checkbox,'Also match provisional features','include_provisional',True,help='Include features that did not pass the S/N checks.')
         include_low=setting(b.checkbox,'Also match and review low-reliability features','include_low',False,help='Include features set aside as likely artefacts.')
         companion_tolerance=setting(c.number_input,'Companion velocity agreement (km/s)','companion_tolerance',50.,min_value=5.,max_value=500.,step=5.,help='For the evidence panel: other lines of the same molecule must sit at the same velocity within this tolerance.')
+        blend_margin=setting(a.number_input,'Blend candidates: margin beyond the feature (km/s)','blend_margin_kms',100.,min_value=0.,max_value=1000.,step=20.,help='Catalogue lines predicted inside a feature, or this close to its edges, are offered as blended lines.')
     def passes_reliability(ident):return include_low or reliable(ident)
     targets={k:[q for q in features if (q['significant'] or include_provisional) and passes_reliability(q['id'])] for k,features in results.items()}
     n_targets=sum(map(len,targets.values()))
@@ -420,7 +423,7 @@ with body:
     match_settings=dict(catalogue_settings,detection=signature,include_provisional=include_provisional,companion_tolerance=companion_tolerance,linked_apertures=linked,method=method)
     identifications=st.session_state.get('identifications')
     if identifications and identifications['signature']!=digest(catalogue_settings):identifications=None
-    matches={};method_suggestions=None;method_notes={};revision=identifications['queried_utc']+'|builtin' if identifications and method=='builtin' else None
+    matches={};method_suggestions=None;method_notes={};method_blends=None;revision=identifications['queried_utc']+'|builtin' if identifications and method=='builtin' else None
     def channel_bounds(k,q):
         f=loaded[k]['cube'].frequency;half=abs(f[1]-f[0])/2
         return float(min(f[q['lo']],f[q['hi']])-half),float(max(f[q['lo']],f[q['hi']])+half)
@@ -516,14 +519,20 @@ with body:
                     files=r.get('output_files',{})
                     if files.get('interactive_plot') and Path(files['interactive_plot']).exists():
                         st.download_button(f'Download AMASE {s_.lower()} fit (interactive HTML)',Path(files['interactive_plot']).read_bytes(),f'amase_{s_.lower()}_fit.html','text/html',key='amase_html_'+s_)
-            method_suggestions={}
+            method_suggestions={};method_blends={}
             channel={k:float(abs(v['cube'].frequency[1]-v['cube'].frequency[0])) for k,v in loaded.items()}
             feats=[dict(id=q['id'],spw=k,sign=q['sign'],lo_GHz=channel_bounds(k,q)[0],hi_GHz=channel_bounds(k,q)[1]) for k,features in targets.items() for q in features]
             for sign,summary in amase_run['summaries'].items():
                 for ident,r in amase_bridge.map_to_features(summary,feats,sign,channel).items():
-                    matches[ident]=r['candidates'];method_suggestions[ident]=r['suggestion'];method_notes[ident]='AMASE: '+r['note']
+                    matches[ident]=r['candidates'];method_suggestions[ident]=r['suggestion'];method_notes[ident]='AMASE: '+r['note'];method_blends[ident]=r.get('blend',[])
             revision='amase|'+amase_run['run_utc']
     if matches:matches=add_evidence(matches,lookup,identifications['selected'] if identifications else {},loaded,z,companion_tolerance,linked,results)
+    # Blend candidates: every transition predicted inside each feature (not only near its centroid).
+    inventories={}
+    for ident,(k,q) in lookup.items():
+        rows=list((identifications or {}).get('selected',{}).get(k,[])) if identifications else []
+        if method=='amase':rows+=matches.get(ident,[])
+        inventories[ident]=blends.inventory(q,loaded[k]['cube'].frequency,rows,z,blend_margin) if rows else []
     id_scores={}
     if method=='builtin':
         # Identification probabilities: which transition, given that the feature is real.
@@ -578,7 +587,10 @@ with body:
     else:review_box=st.expander('Current identifications, and loading a saved solution',key='review_waiting')
     review_scores={ident:dict(reliability=scores.get(ident,{}).get('reliability'),region=scores.get(ident,{}).get('region'),method_note=method_notes.get(ident),**id_scores.get(ident,{})) for ident in lookup}
     provenance=dict(queried_utc=identifications['queried_utc'] if identifications else None,method=method,settings=match_settings) if (identifications or method_suggestions is not None) else None
-    with review_box:assignments,solution=identification_review(lookup,matches,solution_context,feature_keys,loaded,extractions,intervals,provenance,revision,Path(os.environ.get('CONLINES_SOLUTION_DIR',ROOT/'solutions')),scores=review_scores,review_ids=[i for i in lookup if passes_reliability(i)],suggestions=method_suggestions,method=method)
+    with review_box:assignments,solution=identification_review(lookup,matches,solution_context,feature_keys,loaded,extractions,intervals,provenance,revision,Path(os.environ.get('CONLINES_SOLUTION_DIR',ROOT/'solutions')),scores=review_scores,review_ids=[i for i in lookup if passes_reliability(i)],suggestions=method_suggestions,method=method,inventories=inventories,blend_suggestions=method_blends)
+    if ready:
+        with st.container(border=True):
+            blend_section(lookup,loaded,extractions,z,inventories,feature_keys,st.session_state['solution_'+solution_scope],assignments)
     if not done:st.button('Continue to maps →',type='primary',on_click=go_to,args=(5,),key='continue_4')
 reviewed=sum(a_['reviewed'] for a_ in assignments.values());named=sum(a_['transition'] is not None for a_ in assignments.values())
 header(head,4,done,f"{method_name}: {named} feature{'s' if named!=1 else ''} with an identification, {reviewed} reviewed",
@@ -591,14 +603,14 @@ if st.session_state['stage']<5:finish(4)
 # ================================================================ 5 · Make maps
 head,body,done=step(5)
 with body:
-    label=lambda ident:f"{ident} · {lookup[ident][1]['sign']} · "+(assignments[ident]['transition']['species'] if assignments[ident]['transition'] else 'unidentified')
+    label=lambda ident:f"{ident} · {lookup[ident][1]['sign']} · "+describe_assignment(assignments[ident])
     default=[i for i in lookup if assignments[i]['reviewed'] and assignments[i]['transition']]
     adopted_ids=setting(st.multiselect,'Features to map','map_features',default,options=list(lookup),format_func=label,help='Defaults to the features you identified and reviewed.')
     adopted_ids=[i for i in adopted_ids if i in lookup]
     if not adopted_ids:st.info('Choose at least one feature to map.')
     else:
         st.caption('Each map integrates the feature over its channel range. Adjust a range if the line is wider or blended; this changes the maps only, not the detection.')
-        table=pd.DataFrame([dict(ID=i,Identification=(assignments[i]['transition']['species'] if assignments[i]['transition'] else 'Unidentified'),Reviewed=assignments[i]['reviewed'],Start=intervals[i][0],End=intervals[i][1]) for i in adopted_ids])
+        table=pd.DataFrame([dict(ID=i,Identification=describe_assignment(assignments[i]),Reviewed=assignments[i]['reviewed'],Start=intervals[i][0],End=intervals[i][1]) for i in adopted_ids])
         edited=st.data_editor(table,hide_index=True,width='stretch',key='intervals_'+digest(adopted_ids)+'_'+str(st.session_state.get('interval_revision_'+solution_scope,0)),disabled=['ID','Identification','Reviewed'],
                               column_config={'Start':st.column_config.NumberColumn('First channel',min_value=0,step=1),'End':st.column_config.NumberColumn('Last channel',min_value=0,step=1)})
         for _,r in edited.iterrows():
@@ -606,6 +618,22 @@ with body:
         a,b=st.columns(2)
         baseline=setting(a.selectbox,'Map baseline subtraction','baseline','linear',options=['linear','constant','none'],help='Fitted to the channels beside each line, per pixel.')
         map_zoom=setting(b.slider,'Map preview zoom','map_zoom',3.,min_value=1.,max_value=8.,step=.5)
+        fits_store=st.session_state.get('blend_fits',{})
+        blended_ids=[i for i in adopted_ids if feature_keys[i] in fits_store]
+        if blended_ids:
+            a,b=st.columns([1.4,1])
+            split_maps=setting(a.checkbox,'Also map each line of a blended feature separately (from its blend fit)','split_maps',True,
+                               help='Every pixel is fitted with the lines of the Step 4 blend fit (strengths free), giving one map per line plus maps of the fit residual and of the local velocity and width. '+', '.join(blended_ids))
+            local_shape=setting(b.selectbox,'Per-pixel line shape','local_shape','Follows the local velocity and width',options=['Follows the local velocity and width','Aperture shape everywhere'],
+                                help='Recommended: in pixels with signal, all lines share one Gaussian whose velocity and width are fitted per pixel, so rotation does not leak flux into a blended neighbour. '
+                                     'The velocity is searched within half the separation of the lines whose strengths are free (tied lines do not count). “Aperture shape everywhere” keeps the Step 4 shape unshifted.')=='Follows the local velocity and width'
+        else:split_maps=False;local_shape=True
+        with st.expander('Extra maps over part of a line (advanced)'):
+            st.caption('For example the blue and red halves of a line, or the wings of an outflow. Each row makes one more map, integrated over the channels given, using the feature’s main identification for the velocity scale.')
+            extra=st.data_editor(pd.DataFrame({'Feature':pd.Series(dtype='str'),'Label':pd.Series(dtype='str'),'First channel':pd.Series(dtype='Int64'),'Last channel':pd.Series(dtype='Int64')}),
+                                 num_rows='dynamic',hide_index=True,width='stretch',key='extra_maps',
+                                 column_config={'Feature':st.column_config.SelectboxColumn('Feature',options=adopted_ids),'Label':st.column_config.TextColumn('Label (e.g. blue wing)'),
+                                                'First channel':st.column_config.NumberColumn('First channel',min_value=0,step=1),'Last channel':st.column_config.NumberColumn('Last channel',min_value=0,step=1)})
         if st.button('Generate maps & download bundle',type='primary'):
             output=io.BytesIO();manifest=dict(detection=analysis,identifications=dict(identifications or {},matches=matches,settings=match_settings,method=method,amase=st.session_state.get('amase') if method=='amase' else None),solution=solution,apertures=configs,map_preview_zoom=map_zoom,lines=[])
             with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as archive:
@@ -620,6 +648,9 @@ with body:
                                 if keyword in h:del h[keyword]
                             h['VREFGHZ']=(matching_frequency(q),'Observed reference for velocity channel widths')
                         h['IDSTAT']='REVIEWED' if assignments[ident]['reviewed'] else 'TENTATIVE'
+                        if assignments[ident].get('blend'):
+                            h['BLENDED']=('; '.join(b_['species'] for b_ in assignments[ident]['blend'])).encode('ascii','backslashreplace').decode()[:68]
+                            h.add_history('Blended feature: this map integrates every blended line; see the per-line maps.')
                         h['LINEID']=name.encode('ascii','backslashreplace').decode();h['SRCFILE']=loaded[k]['name'].encode('ascii','backslashreplace').decode();h.add_history('Aperture: '+json.dumps(configs[k]))
                         archive.writestr(ident+'.fits',fits_bytes(im,h))
                         manifest['lines'].append(dict(id=ident,source=loaded[k]['name'],transition=line,lo=lo,hi=hi,baseline=baseline,frame=cube.frame,unit=h['BUNIT']))
@@ -627,7 +658,62 @@ with body:
                         fig.data[0].colorscale='RdBu_r';fig.data[0].zmid=0;fig.data[0].colorbar.title=h['BUNIT'];st.plotly_chart(fig,width='stretch',key='map_'+ident)
                         archive.writestr(ident+'.html',fig.to_html(include_plotlyjs=True))
                     except (ValueError,TypeError) as e:st.error(f'{ident}: {e}')
-                features_csv=pd.DataFrame([dict(ID=i,Window=loaded[k]['name'],Sign=q['sign'],Observed_GHz=matching_frequency(q),SNR=q['snr'],Significant=q['significant'],Reliability=scores.get(i,{}).get('reliability'),Start=intervals[i][0],End=intervals[i][1],Identification=assignments[i]['transition']['species'] if assignments[i]['transition'] else None,Reviewed=assignments[i]['reviewed']) for i,(k,q) in lookup.items()])
+                def write_map(file_id,im,h,k,title,record):
+                    archive.writestr(file_id+'.fits',fits_bytes(im,h))
+                    fig=chart_image(im,title,center=(configs[k]['x'],configs[k]['y']),zoom=map_zoom)
+                    fig.data[0].colorscale='RdBu_r';fig.data[0].zmid=0;fig.data[0].colorbar.title=h['BUNIT'];st.plotly_chart(fig,width='stretch',key='map_'+file_id)
+                    archive.writestr(file_id+'.html',fig.to_html(include_plotlyjs=True));manifest['lines'].append(record)
+                def asc(text):return str(text).replace('±','+/-').replace('–','-').replace('—','-').replace('×','x').replace('σ','sigma').encode('ascii','replace').decode()
+                def safe(text):return ''.join(ch if ch.isalnum() or ch in '+-.' else '_' for ch in text)[:60]
+                if split_maps:
+                    done_fits=set()
+                    for ident in blended_ids:
+                        fit=fits_store[feature_keys[ident]];fit_id=digest(fit['regions'])
+                        if fit_id in done_fits:continue
+                        done_fits.add(fit_id)
+                        try:
+                            region_keys=[r_['spw'] for r_ in fit['regions']]
+                            with st.spinner('Fitting every pixel of the blended feature…'):
+                                maps,diag=blends.component_maps(fit,{i:loaded[k_]['cube'] for i,k_ in enumerate(region_keys)},{i:extractions[k_]['noise'] for i,k_ in enumerate(region_keys)},local=local_shape)
+                            for key_,(im,i) in maps.items():
+                                r_=fit['regions'][i];k=r_['spw'];cube=loaded[k]['cube'];q_=next(c_ for c_ in fit['components'] if c_['key']==key_);row=q_['row']
+                                if r_['id'] not in adopted_ids:continue
+                                h=WCS(cube.header).celestial.to_header()
+                                for kw in ['BMAJ','BMIN','BPA','OBJECT','SPECSYS']:
+                                    if kw in cube.header:h[kw]=cube.header[kw]
+                                h['BUNIT']=cube.unit+' km/s';h['RESTFRQ']=float(row['rest_GHz']*1e9);h['REDSHIFT']=float(fit['z']);h['CHANLO']=r_['lo'];h['CHANHI']=r_['hi']
+                                h['LINEID']=row['species'].encode('ascii','backslashreplace').decode();h['IDSTAT']='BLENDFIT';h['SRCFILE']=loaded[k]['name'].encode('ascii','backslashreplace').decode()
+                                h['FITSHAPE']='local Gaussian' if local_shape else fit['kind'];h.add_history(asc('Per-pixel blend decomposition. Aperture fit: '+blends.describe_shape(fit)+'. Per pixel: '+diag[i]['note']+'.'))
+                                if local_shape:h.add_history(asc('Pixels with signal: strengths keep the sign of the line; other pixels use the aperture shape, signed and unclipped.'))
+                                partners=[fit.get('names',{}).get(d_,d_) for d_ in q_.get('degenerate_with',[])]
+                                if partners:h.add_history(asc('Not separable from '+', '.join(partners)+' with this spectrum alone: the split between them is uncertain.'))
+                                if q_.get('tie'):h.add_history(asc(f"Tied: {q_['tie'][1]:g} x {fit.get('names',{}).get(q_['tie'][0],q_['tie'][0])}"))
+                                write_map(f"{r_['id']}__{safe(row['species'])}",im,h,k,f"{loaded[k]['name']} · {row['species']} (from the blend fit)",
+                                          dict(id=r_['id'],source=loaded[k]['name'],transition=row,lo=r_['lo'],hi=r_['hi'],method='blend fit',fit_shape=fit['kind'],frame=cube.frame,unit=h['BUNIT']))
+                            for i,d_ in diag.items():
+                                r_=fit['regions'][i];k=r_['spw'];cube=loaded[k]['cube']
+                                if r_['id'] not in adopted_ids:continue
+                                if d_.get('limited'):st.warning(f"{r_['id']}: many pixels sit at the edge of the per-pixel velocity window (±{d_['window_kms']:.0f} km/s, half the separation of its free lines), so the velocity field reaches beyond it. There the lines may not be separated correctly; tie a line to a partner in another window, or use the combined map.")
+                                for name_,im,unit_,text in [('fit_residual_rms',d_['rms'],cube.unit,'RMS of the per-pixel blend-fit residual over these channels: shows where the fitted lines do not describe the data.'),
+                                                            ('fit_velocity',d_['velocity'],'km/s','Per-pixel velocity of the shared Gaussian, relative to the redshift (radio convention; NaN where not fitted).'),
+                                                            ('fit_sigma',d_['sigma'],'km/s','Per-pixel Gaussian sigma of the shared line shape (NaN where not fitted).')]:
+                                    if not np.isfinite(im).any():continue
+                                    h=WCS(cube.header).celestial.to_header();h['BUNIT']=unit_;h['CHANLO']=r_['lo'];h['CHANHI']=r_['hi'];h.add_history(asc(text))
+                                    archive.writestr(f"{r_['id']}__{name_}.fits",fits_bytes(im,h))
+                        except (ValueError,TypeError,KeyError) as e:st.error(f'Per-line maps for {ident}: {e}')
+                for n_,row_ in extra.dropna(subset=['Feature','First channel','Last channel']).iterrows():
+                    ident=row_['Feature']
+                    if ident not in lookup:continue
+                    k,q=lookup[ident];cube=loaded[k]['cube'];line=assignments[ident]['transition'];lo,hi=sorted([int(row_['First channel']),int(row_['Last channel'])])
+                    try:
+                        im,h=moment(cube,lo,hi,line['rest_GHz'] if line else matching_frequency(q),z if line else 0.,baseline)
+                        label_=str(row_['Label']) if pd.notna(row_['Label']) and str(row_['Label']).strip() else f'ch{lo}-{hi}'
+                        h['LINEID']=((line['species'] if line else 'Unidentified')+' '+label_).encode('ascii','backslashreplace').decode()[:68];h['SRCFILE']=loaded[k]['name'].encode('ascii','backslashreplace').decode()
+                        write_map(f"{ident}__{safe(label_)}",im,h,k,f"{loaded[k]['name']} · {ident} · {label_} · channels {lo}–{hi}",
+                                  dict(id=ident,source=loaded[k]['name'],transition=line,lo=lo,hi=hi,baseline=baseline,part=label_,frame=cube.frame,unit=h['BUNIT']))
+                    except ValueError as e:st.error(f'{ident} ({row_["Label"]}): {e}')
+                features_csv=pd.DataFrame([dict(ID=i,Window=loaded[k]['name'],Sign=q['sign'],Observed_GHz=matching_frequency(q),SNR=q['snr'],Significant=q['significant'],Reliability=scores.get(i,{}).get('reliability'),Start=intervals[i][0],End=intervals[i][1],Identification=describe_assignment(assignments[i]) if assignments[i]['transition'] else None,Reviewed=assignments[i]['reviewed']) for i,(k,q) in lookup.items()])
+                manifest['blend_fits']={i:fits_store[feature_keys[i]] for i in blended_ids}
                 archive.writestr('identification_solution.json',json.dumps(solution,indent=2));archive.writestr('manifest.json',json.dumps(manifest,indent=2));archive.writestr('features.csv',features_csv.to_csv(index=False))
             if manifest['lines']:
                 st.download_button('Download FITS maps + interactive previews + provenance',output.getvalue(),'adopted_line_maps.zip','application/zip',on_click='ignore')

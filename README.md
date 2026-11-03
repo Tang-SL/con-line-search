@@ -394,6 +394,55 @@ Each run takes minutes, so it starts only when you press **Run Astro AMASE**.
 The interactive AMASE fit can be downloaded from Step 4, and the run settings
 and results go into the export ZIP and the solution provenance.
 
+### Blended features (Step 4 › Blended features; Step 5 per-line maps)
+
+A broad or odd-shaped feature can contain several transitions; in CONs, for
+example, HCN 3–2 with HCN v₂=1 l=1e (≈40 km/s apart) and HCO⁺ 3–2 with HCN v₂=1
+l=1f (≈400 km/s). The centroid of such a feature means nothing, so:
+
+1. **Blend inventory.** Every catalogue transition predicted inside a feature
+   (± a margin, default 100 km/s) is offered in the review card as “Other lines
+   blended in this feature”. An identification is a main line plus optional
+   blended lines; solutions, maps and `features.csv` keep both. Astro AMASE keeps
+   every line it assigns inside a feature. Vibrationally excited lines appear
+   only if the catalogue's maximum upper-state energy allows them (default 300 K).
+2. **Blend decomposition.** One feature, optionally fitted together with features
+   in other spectral windows, is fitted with one copy of a shared line shape per
+   chosen transition (lines from one nucleus share its kinematics); only the
+   strengths differ (sign-constrained, plus an optional offset per feature).
+   Shapes: one Gaussian; two Gaussians (a negative second part models a
+   self-absorption dip); or the measured profile of an identified, unblended
+   line (template). Strengths can be **tied** (A = ratio × B), e.g. HCN v₂=1 l=1e
+   = l=1f, which breaks the degeneracy of lines too close to separate. For each
+   line the table gives peak and integrated intensity with uncertainties from the
+   full fit (strengths and shape together), its share of the feature and ΔBIC
+   from refitting without it: *Needed* (>10), *Weak evidence* (2–10), *Not
+   needed*, *Needed, but not separable* (only the group is required; the fit can
+   trade flux between them) or *Set by tie*. **Use this fit as the
+   identification** records the main and blended lines as reviewed.
+3. **Per-line maps (Step 5).** Every pixel is fitted with the same lines. In
+   pixels with signal (|S/N| > 3 over the fitted channels) all lines share one
+   Gaussian whose velocity and width are fitted per pixel, so rotation does not
+   leak flux into a blended neighbour; its velocity is searched within half the
+   smallest separation between lines whose strengths are free there (tied lines
+   do not count), and strengths keep their sign. Other pixels use the aperture
+   shape. The bundle also holds maps of the per-pixel velocity, width and
+   residual RMS. Lines closer than the velocity spread can only be split per
+   pixel through a tie; the app warns when the window may be too small, and the
+   FITS history names lines that are not separable. *Extra maps over part of a
+   line* integrate any channel sub-range (e.g. blue and red wings).
+
+Example (IRAS 17208-0014, central 0.32″ aperture, cz = 12824 km/s): SPW27's
+feature (channels 143–357) holds HCN 3–2 and HCN v₂=1 l=1e; SPW25's holds HCO⁺
+3–2 and HCN v₂=1 l=1f. A joint two-Gaussian fit with l=1e tied to l=1f gives
+HCN v₂=1 ≈ 0.92 ± 0.09 Jy/beam km/s per l-component, ≈9% of HCN 3–2. Without the
+tie, HCN and HCN v₂=1 l=1e are flagged as not separable. The single-Gaussian fit
+fails (reduced χ² ≈ 11; the profile is double-peaked).
+
+Caveats: the shared shape is applied to every line, including ones that are not
+self-absorbed (vibrationally excited lines); uncertainties ignore channel
+correlations; strengths of self-absorbed lines are not optically thin ratios.
+
 ### Catalogue filtering
 
 Default Extragalactic selection, Eu≤300 K, deuterated/trans species excluded,

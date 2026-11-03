@@ -39,3 +39,18 @@ def test_cube_fingerprint_changes_with_pixels_or_wcs():
     assert cube_fingerprint(cube)!=cube_fingerprint(copy_cube)
     copy_cube=copy.deepcopy(cube);copy_cube.header['CRVAL1']+=.1
     assert cube_fingerprint(cube)!=cube_fingerprint(copy_cube)
+
+
+def test_blended_lines_survive_save_and_load():
+    import json
+    from conlines.solutions import make_solution,restore_solution,describe_assignment
+    main=dict(species='HCN',rest_GHz=265.886434,qns='3-2');vib=dict(species='HCN v2=1',rest_GHz=265.852709,qns='3-2 l=1e')
+    keys={'F1':'k1'};context=dict(a=1)
+    a={'F1':dict(transition=main,blend=[vib],reviewed=True,origin='blend fit')}
+    payload=json.loads(json.dumps(make_solution('x',context,keys,a,{'F1':(1,5)},None,{'k1':dict(kind='gauss')})))
+    assert payload['blend_fits']=={'k1':dict(kind='gauss')}
+    restored,_=restore_solution(payload,context,keys,{'F1':10})
+    assert restored['F1']['blend'][0]['species']=='HCN v2=1' and describe_assignment(restored['F1'])=='HCN + HCN v2=1'
+    # Older solutions (no blend field) still load.
+    del payload['features'][0]['assignment']['blend']
+    assert restore_solution(payload,context,keys,{'F1':10})[0]['F1']['blend']==[]

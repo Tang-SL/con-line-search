@@ -30,7 +30,8 @@ def spectrum_plot(cube,extraction,features=(),selected_id=None,assignments=None)
         line=assignment.get('transition')
         if assignments is not None:
             species=line['species'] if line else 'Unidentified'
-            label=q.get('id','feature')+' '+(species[:23]+'…' if len(species)>24 else species)+(' ?' if not assignment.get('reviewed') else '')
+            extra=len(assignment.get('blend') or [])
+            label=q.get('id','feature')+' '+(species[:23]+'…' if len(species)>24 else species)+(f' +{extra}' if extra else '')+(' ?' if not assignment.get('reviewed') else '')
         snr='unavailable' if q['snr'] is None else f"{q['snr']:.2f}"
         status='Significant' if significant else 'Provisional'
         idx=int(np.argmin(abs(cube.frequency-frequency)))

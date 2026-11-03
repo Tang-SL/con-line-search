@@ -122,7 +122,9 @@ def map_to_features(summary, features, sign, channel_GHz):
 
     features: dicts with id, sign, lo_GHz, hi_GHz (observed). An AMASE line belongs
     to a feature if its frequency lies within the feature's interval (+/- half a
-    channel); the strongest such line is used.
+    channel). A broad feature can hold several AMASE lines (a blend): the strongest
+    assigned line is the suggestion, the other assigned lines are suggested as
+    blended lines, and all their candidates are offered.
     """
     vlsr = float(summary['vlsr'])
     kept = {m['molecule'] for m in summary.get('kept_molecules', [])}
@@ -132,27 +134,41 @@ def map_to_features(summary, features, sign, channel_GHz):
             continue
         lo, hi = sorted([f['lo_GHz'], f['hi_GHz']])
         half = abs(channel_GHz.get(f['spw'], 0.))/2
-        lines = [l for l in summary['lines'] if lo-half <= l['frequency_MHz']/1000. <= hi+half]
+        lines = sorted([l for l in summary['lines'] if lo-half <= l['frequency_MHz']/1000. <= hi+half],
+                       key=lambda l: -l['intensity'])
         if not lines:
-            out[f['id']] = dict(status='no AMASE line', candidates=[], suggestion=None,
+            out[f['id']] = dict(status='no AMASE line', candidates=[], suggestion=None, blend=[],
                                 note='AMASE found no ≥ threshold peak inside this feature.')
             continue
-        line = max(lines, key=lambda l: l['intensity'])
-        candidates = [candidate_row(c, vlsr) for c in line['candidates']]
-        best = candidate_row(line['best'], vlsr) if line.get('best') else None
+        line = lines[0]
+        def usable(l):
+            best = candidate_row(l['best'], vlsr) if l.get('best') else None
+            if l['status'] != 'assigned' or best is None or (kept and best['species'] not in kept):
+                return None
+            return best
+        candidates = []
+        def add(row):
+            if not any(c['species'] == row['species'] and abs(c['rest_GHz']-row['rest_GHz']) < 1e-6 for c in candidates):
+                candidates.append(row)
+        for l in lines:
+            if l.get('best'):
+                add(candidate_row(l['best'], vlsr))
+            for c in l['candidates']:
+                add(candidate_row(c, vlsr))
         status = line['status']
-        suggestion = None
         note = {'assigned': 'AMASE assigned this line.', 'multiple_carriers': 'AMASE: several possible carriers.',
                 'unidentified': 'AMASE: unidentified.'}.get(status, status)
-        if status == 'assigned' and best is not None:
-            if kept and best['species'] not in kept:
-                note = 'AMASE assigned this line, but the molecule was removed by its best-fit model.'
-            else:
-                suggestion = best
-        if best is not None and not any(c['species'] == best['species'] and abs(c['rest_GHz']-best['rest_GHz']) < 1e-6 for c in candidates):
-            candidates.insert(0, best)
-        out[f['id']] = dict(status=status, candidates=candidates, suggestion=suggestion, note=note,
-                            line_MHz=line['frequency_MHz'], line_intensity_K=line['intensity'])
+        best = candidate_row(line['best'], vlsr) if line.get('best') else None
+        if status == 'assigned' and best is not None and kept and best['species'] not in kept:
+            note = 'AMASE assigned this line, but the molecule was removed by its best-fit model.'
+        suggestion = usable(line)
+        blend = [b for b in (usable(l) for l in lines[1:]) if b is not None and suggestion is not None
+                 and not (b['species'] == suggestion['species'] and abs(b['rest_GHz']-suggestion['rest_GHz']) < 1e-6)]
+        if len(lines) > 1:
+            note += f' {len(lines)} AMASE lines lie inside this feature' + (f" ({', '.join(b['species'] for b in blend)} also assigned)." if blend else '.')
+        out[f['id']] = dict(status=status, candidates=candidates, suggestion=suggestion, blend=blend, note=note,
+                            line_MHz=line['frequency_MHz'], line_intensity_K=line['intensity'],
+                            lines_MHz=[l['frequency_MHz'] for l in lines])
     return out
 
 
