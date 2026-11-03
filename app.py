@@ -41,8 +41,8 @@ def load_upload(digest,_file):
     _file.seek(0)
     return read_cube(_file)
 @st.cache_data(max_entries=8,show_spinner=False)
-def search_cube(key,widths,mode,clip,continuum_subtracted,_cube):
-    return run_espada(_cube,widths,mode,clip,continuum_subtracted)
+def search_cube(key,widths,mode,clip,continuum_subtracted,noise,_cube):
+    return run_espada(_cube,widths,mode,clip,continuum_subtracted,noise)
 @st.cache_data(max_entries=16,show_spinner=False)
 def identify_cube(key,_cube):return cube_fingerprint(_cube)
 @st.cache_data(max_entries=32,show_spinner=False)
@@ -177,7 +177,10 @@ with body:
         widths=setting(b.multiselect,'Trial widths (channels)','widths',[3,5,9],options=[3,5,7,9,13,17],help='Spectral smoothing widths tried by the finder.')
         mode=setting(a.selectbox,'Search for','mode','Both',options=['Both','Emission','Absorption'])
         continuum_subtracted=setting(b.checkbox,'Input cubes are continuum-subtracted','contsub',True,help='Untick to let SoFiA remove a linear continuum.')
-    finder_settings=dict(engine='espada-v2-fullfield',widths=sorted(widths),mode=mode,clip=clip,continuum_subtracted=continuum_subtracted)
+        local_noise=setting(a.checkbox,'Noise varies across the field','local_noise',True,help='On (recommended): SoFiA measures the noise locally, so the noisier edge of a primary-beam-corrected (pbcor) cube does not produce false detections. Off: one noise level per channel, as in the IC 860 pilot.')
+        st.caption('Blank pixels (for example outside the primary-beam cutoff of a pbcor cube) are ignored, and the search is limited to the area that contains data.')
+    noise='local' if local_noise else 'spectral'
+    finder_settings=dict(engine='espada-v2-fullfield',widths=sorted(widths),mode=mode,clip=clip,continuum_subtracted=continuum_subtracted,noise=noise)
     detection_signature=digest(dict(datasets=[loaded[k]['fingerprint'] for k in loaded],bindings=list(loaded),settings=finder_settings))
     def component_prefix(k,i):return 'SPW'+k.removeprefix('example') if k.startswith('example') else f'Cube{i+1}'
     detection=st.session_state.get('detection')
@@ -187,17 +190,22 @@ with body:
         for i,(k,v) in enumerate(loaded.items()):
             try:
                 with st.spinner(f"Searching {v['name']}… (can take a few minutes)"):
-                    run=search_cube(v['fingerprint'],tuple(widths),mode,clip,continuum_subtracted,v['cube'])
+                    run=search_cube(v['fingerprint'],tuple(widths),mode,clip,continuum_subtracted,noise,v['cube'])
                 # IDs belong to the cube's detections, so they stay fixed when the aperture moves.
                 ordered=sorted(run['components'],key=lambda c:(c['frequency_GHz'],c['sign']))
                 runs[k]=dict(run,components=[dict(c,id=f'{component_prefix(k,i)}-F{n+1:03}') for n,c in enumerate(ordered)])
                 status.append(dict(Cube=v['name'],Features_found=len(ordered),Status='Done'))
-            except Exception as e:status.append(dict(Cube=v['name'],Features_found=None,Status=str(e)))
+            except Exception as e:status.append(dict(Cube=v['name'],Features_found=None,Status='Failed: '+str(e)))
         st.session_state['detection']=dict(signature=detection_signature,runs=runs,status=status)
-        st.session_state['stage']=max(st.session_state['stage'],3);st.rerun()
+        # Move on by itself only when every cube was searched; a failure must be seen, not folded away.
+        if len(runs)==len(loaded):st.session_state['stage']=max(st.session_state['stage'],3)
+        st.rerun()
     if valid:
+        for s_ in detection['status']:
+            if s_['Status']!='Done':st.error(f"**The search failed for {s_['Cube']}**, so its lines are missing (this is not the same as finding no lines).  \n{s_['Status']}")
         st.dataframe(pd.DataFrame(detection['status']),hide_index=True,width='stretch')
-        if not done:st.button('Continue →',type='primary',on_click=go_to,args=(3,),key='continue_2')
+        if not done and detection['runs']:
+            st.button('Continue →' if len(detection['runs'])==len(loaded) else 'Continue without the failed cubes →',type='primary',on_click=go_to,args=(3,),key='continue_2')
         if not done:
             for n,(k,run) in enumerate(detection['runs'].items()):
                 components=run['components']
@@ -213,9 +221,10 @@ with body:
                     col2.dataframe(pd.DataFrame([dict(ID=c['id'],Type=c['sign'],GHz=round(c['frequency_GHz'],6),x=round(c['x'],1),y=round(c['y'],1),Channels=f"{c['lo']}–{c['hi']}") for c in components]),hide_index=True,width='stretch',height=min(430,38+35*len(components)))
     elif detection:st.info('The cubes or detection settings changed since the last search. Press **Find lines in all cubes** again.')
 total=sum(len(r['components']) for r in detection['runs'].values()) if valid else 0
-header(head,2,done,f"{total} feature{'s' if total!=1 else ''} found across {len(loaded)} cube{'s' if len(loaded)!=1 else ''}",
+failed=sum(s_['Status']!='Done' for s_ in detection['status']) if valid else 0
+header(head,2,done,f"{total} feature{'s' if total!=1 else ''} found across {len(loaded)-failed} cube{'s' if len(loaded)-failed!=1 else ''}"+(f" — search FAILED for {failed} cube{'s' if failed!=1 else ''}" if failed else ''),
        'press <b>Find lines in all cubes</b>. Every cube is searched for emission and absorption; this can take a few minutes per cube and only needs repeating if you change the cubes or the settings.')
-if not valid:
+if not valid or not detection['runs']:
     clamp(2);finish(2)
 if st.session_state['stage']<3:finish(2)
 all_components=[(k,c) for k,run in detection['runs'].items() for c in run['components']]

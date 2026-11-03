@@ -23,17 +23,40 @@ def executables():
     return espada,sofia
 
 
-def run_espada(cube, widths=(3,5,9), mode='Both', clip=5., continuum_subtracted=True):
-    """Search the full spatial/spectral cube; cacheable without aperture/catalogue."""
+def noise_window(shape):
+    """Spatial window (pixels, odd) for SoFiA's local noise: about a quarter of the field.
+
+    Large enough that a bright, broad source covers only a small fraction of any
+    window (so it does not inflate its own noise estimate), small enough to follow
+    the primary-beam noise rise of a pbcor cube."""
+    w=max(31,min(shape)//4)
+    return w+1-w%2
+
+
+def run_espada(cube, widths=(3,5,9), mode='Both', clip=5., continuum_subtracted=True, noise='local'):
+    """Search the full spatial/spectral cube; cacheable without aperture/catalogue.
+
+    Blank (NaN) pixels, such as the region outside the primary-beam cutoff of an
+    ALMA pbcor cube, are passed to SoFiA, which ignores them; the cube is first
+    cropped to the box containing data. noise='local' lets SoFiA measure the noise
+    as it varies across the field (pbcor cubes are noisier towards the edge);
+    noise='spectral' uses one noise level per channel, as in the IC 860 pilot.
+    """
     espada,sofia=executables()
-    if not np.all(np.isfinite(cube.data)):
-        raise ValueError('This ESPADA integration requires finite pixels. Crop blank borders or prepare a finite cube before detection.')
+    finite=np.isfinite(cube.data)
+    covered=np.any(finite,axis=0)
+    if not covered.any():raise ValueError('The cube contains no data (all pixels are blank).')
+    rows=np.flatnonzero(covered.any(axis=1));cols=np.flatnonzero(covered.any(axis=0))
+    y0,y1,x0,x1=int(rows[0]),int(rows[-1])+1,int(cols[0]),int(cols[-1])+1
+    data=cube.data[:,y0:y1,x0:x1]
+    ny,nx=cube.data.shape[1:];nyc,nxc=data.shape[1:]
     modes=['absorption','emission'] if mode=='Both' else [mode.lower()]
     with tempfile.TemporaryDirectory(prefix='conlines-espada-') as folder:
         work=Path(folder);h=WCS(cube.header).sub([1,2,3]).to_header()
         for k in ['BUNIT','BMAJ','BMIN','BPA','RESTFRQ','RESTFREQ','OBJECT','SPECSYS']:
             if k in cube.header:h[k]=cube.header[k]
-        source=work/'cube.fits';fits.writeto(source,cube.data,h,checksum=True)
+        h['CRPIX1']-=x0;h['CRPIX2']-=y0
+        source=work/'cube.fits';fits.writeto(source,data,h,checksum=True)
         cfg=yaml.safe_load((ROOT/'targets/ic860/alma/espada_b5_all/config/pilot.template.yaml').read_text())
         cfg.update(make_report=False,output_dir=str(work/'run'),input_data_set={'cube':[str(source)]},
                    run_mode='both' if mode=='Both' else mode.lower(),num_cores=1)
@@ -45,6 +68,9 @@ def run_espada(cube, widths=(3,5,9), mode='Both', clip=5., continuum_subtracted=
                        'scfind.kernelsZ':', '.join(map(str,[0,*widths])),
                        'contsub.enable':'false' if continuum_subtracted else 'true',
                        'contsub.order':'1','output.writeNoise':'false'}
+            if noise=='local':
+                overrides.update({'scaleNoise.enable':'true','scaleNoise.mode':'local','scaleNoise.windowXY':str(noise_window((nyc,nxc))),
+                                  'scaleNoise.windowZ':'31','scaleNoise.gridXY':'0','scaleNoise.gridZ':'0','scaleNoise.interpolate':'true'})
             text=(ROOT/f'targets/ic860/alma/espada_b5_all/config/{label}.par').read_text()
             lines=[f'{line.split("=")[0].strip()} = {overrides[line.split("=")[0].strip()]}' if line.split('=')[0].strip() in overrides else line for line in text.splitlines()]
             path=work/f'{label}.par';path.write_text('\n'.join(lines)+'\n');cfg[f'sofia_{label}_file']=str(path)
@@ -71,13 +97,15 @@ def run_espada(cube, widths=(3,5,9), mode='Both', clip=5., continuum_subtracted=
             mask=fits.getdata(maskpath);table=Table.read(cat);status[sign]=f'{len(table)} components'
             for r in table:
                 lo,hi=int(r['z_min']),int(r['z_max']);source_id=int(r['id'])
-                footprint=np.flatnonzero(np.any(mask[lo:hi+1]==source_id,axis=0)).tolist()
+                yy,xx=np.nonzero(np.any(mask[lo:hi+1]==source_id,axis=0))
+                footprint=((yy+y0)*nx+(xx+x0)).tolist()   # indices in the full, uncropped image
                 fc=float(np.interp(float(r['z']),np.arange(len(cube.frequency)),cube.frequency))
                 components.append(dict(sofia_id=source_id,sign=sign.capitalize(),lo=lo,hi=hi,
-                                       x=float(r['x']),y=float(r['y']),frequency_GHz=fc,footprint=footprint))
+                                       x=float(r['x'])+x0,y=float(r['y'])+y0,frequency_GHz=fc,footprint=footprint))
         # No spectral catalogue, redshift or molecular information enters this result.
         return dict(components=components,status=status,parameters=parameters,console_log=log,
-                    engine='ESPADA/SoFiA 3D',settings=dict(clip=clip,widths=list(widths),mode=mode,continuum_subtracted=continuum_subtracted))
+                    engine='ESPADA/SoFiA 3D',settings=dict(clip=clip,widths=list(widths),mode=mode,continuum_subtracted=continuum_subtracted,noise=noise),
+                    searched_box=dict(x=[x0,x1],y=[y0,y1]))
 
 
 def aperture_features(cube,extraction,result,threshold=8):

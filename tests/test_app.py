@@ -319,3 +319,17 @@ def test_switching_method_keeps_suggestions_and_hides_empty_review(workbench,mon
     by_label(app.radio,'Identification method').set_value('Velocity likelihood (built-in)').run()
     to_maps(app)
     assert any('2 features with an identification' in e.label for e in app.expander)
+
+
+def test_failed_search_is_shown_and_does_not_advance(tmp_path,monkeypatch):
+    import conlines.espada_backend
+    c=synthetic();c.data[0,0,0]+=.123          # a cube no other test has searched (results are cached)
+    path=tmp_path/'cube.fits';fits.writeto(path,c.data,c.header)
+    def broken(*a,**kw):raise ValueError('SoFiA failed: test failure')
+    monkeypatch.setattr(conlines.espada_backend,'run_espada',broken)
+    app=AppTest.from_file(str(ROOT/'app.py'),default_timeout=60).run()
+    load_and_find(app,str(path))
+    assert not app.exception
+    assert any('search failed' in e.value.lower() and 'test failure' in e.value for e in app.error)
+    assert app.session_state['stage']==2
+    assert not any(n.label=='Radius / half-width (arcsec)' for n in app.number_input)

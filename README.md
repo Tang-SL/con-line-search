@@ -260,6 +260,17 @@ spatial axis, 2 channels, 50 voxels). Thus spatially tiny sources can be missed.
 The continuum-subtracted checkbox defaults on; turn it off for SoFiA's linear
 continuum subtraction. Detection never depends on the aperture, so it is not rerun when only the aperture changes.
 
+**Primary-beam-corrected cubes (ALMA `*.pbcor.fits`).** These are blank (NaN)
+outside the primary-beam cutoff, and their noise rises towards the edge. The
+search is limited to the box that contains data, and SoFiA ignores the remaining
+blank pixels. By default SoFiA measures the noise locally (`scaleNoise.mode =
+local`, a window of about a quarter of the field and 31 channels; *Noise varies
+across the field* under Step 2's advanced settings). With one noise level per
+channel instead, the noisy edge of a pbcor cube produces many false detections:
+in a test on IRAS 17208-0014 SPW27 (central 20″), 186 components against 11
+with local noise, which matched a search of the flat-noise cube (pbcor × pb).
+If a search fails, Step 2 shows the error and does not move on.
+
 Each overlapping component is independently assessed in the chosen aperture.
 Two local baseline estimates (constant with five sideband channels per side,
 linear with ten, after a two-channel gap) are applied to both source and control
