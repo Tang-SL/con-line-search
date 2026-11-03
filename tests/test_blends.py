@@ -115,3 +115,35 @@ def test_local_maps_follow_a_velocity_gradient_without_leaking_into_the_blend():
     steep=(np.exp(-.5*((va[:,None,None]-(xx-5)*45.)/40)**2)*amp+np.random.default_rng(7).normal(0,1e-4,(160,11,11))).astype('float32')
     _,diag2=blends.component_maps(fit,{0:SimpleNamespace(data=steep,frequency=f,header=h)},{0:np.full(160,1e-3)})
     assert diag2[0]['limited']
+
+
+def test_ambiguous_window_uses_the_velocity_field_of_an_unambiguous_one():
+    """Window B holds two lines 380 km/s apart under a +-200 km/s rotation: on its own a
+    pixel can trade one line for the other. Window A (one line, same gas) fixes the
+    velocity field, so B's per-pixel split is right."""
+    from astropy.io import fits
+    a_,b1,b2=265.886434,267.557626,267.199283
+    fa,fb=channels(a_,200),channels(b1,260)
+    yy,xx=np.indices((13,13));vfield=(xx-6)*45.;amp=.05*np.exp(-((xx-6)**2+(yy-6)**2)/30)
+    def line(f,rest,scale):
+        e=rest/(1+Z);v=C*(e-f)/e
+        return np.exp(-.5*((v[:,None,None]-vfield)/50)**2)*amp*scale
+    rng=np.random.default_rng(8)
+    A=(line(fa,a_,1.)+rng.normal(0,2e-4,(200,13,13))).astype('float32')
+    B=(line(fb,b1,.8)+line(fb,b2,.15)+rng.normal(0,2e-4,(260,13,13))).astype('float32')
+    h=fits.Header();h['CTYPE1']='RA---TAN';h['CTYPE2']='DEC--TAN';h['CRPIX1']=7;h['CRPIX2']=7;h['CRVAL1']=10;h['CRVAL2']=5;h['CDELT1']=-1e-5;h['CDELT2']=1e-5
+    ca,cb=SimpleNamespace(data=A,frequency=fa,header=h),SimpleNamespace(data=B,frequency=fb,header=h)
+    regions=[dict(id='A',spw='a',freq=fa,spectrum=A[:,5:8,5:8].mean(axis=(1,2)),noise=np.full(200,2e-4),lo=0,hi=199),
+             dict(id='B',spw='b',freq=fb,spectrum=B[:,5:8,5:8].mean(axis=(1,2)),noise=np.full(260,2e-4),lo=0,hi=259)]
+    fit=blends.decompose(regions,[comp('HCN',a_,0),comp('HCO+',b1,1),comp('vib',b2,1)],'gauss',Z)
+    maps,diag=blends.component_maps(fit,{0:ca,1:cb},{0:np.full(200,2e-4),1:np.full(260,2e-4)})
+    assert 'velocity field' in diag[1]['note']
+    sig=np.isfinite(diag[1]['velocity'])
+    fast=sig&(np.abs(vfield)>200)                         # beyond half the B lines' separation (190 km/s)
+    assert fast.sum()>=10
+    assert np.median(np.abs(diag[1]['velocity'][fast]-vfield[fast]))<15        # B follows the true rotation there too
+    true_vib=.15*amp*50*np.sqrt(2*np.pi)
+    assert .7<np.nansum(maps['vib'][0][sig])/np.sum(true_vib[sig])<1.3         # the weak line is not swapped
+    # Window B alone cannot do this: at the fast pixels it picks the wrong velocity.
+    alone,d_alone=blends.component_maps(blends.decompose([regions[1]],[comp('HCO+',b1,0),comp('vib',b2,0)],'gauss',Z),{0:cb},{0:np.full(260,2e-4)})
+    assert np.median(np.abs(d_alone[0]['velocity'][fast]-vfield[fast]))>40 and d_alone[0]['limited']

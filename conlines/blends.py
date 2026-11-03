@@ -332,16 +332,21 @@ def component_maps(fit, cubes, noises, local=True, snr_cut=5., rows_per_chunk=32
       fitted channels) all lines share one shape whose velocity follows the pixel:
       either a Gaussian with its own velocity and width, or the aperture shape shifted
       to the pixel's velocity (keeps double-peaked, self-absorbed profiles at the
-      nucleus), whichever fits better. This follows rotation and other velocity
-      gradients; with a fixed shape, a line shifted by the local velocity field would
-      leak into its blended neighbours. Other pixels use the aperture shape.
+      nucleus), whichever fits better. With a fixed shape, a line shifted by the local
+      velocity field would leak into its blended neighbours.
+      The velocity is searched within half the smallest separation between the lines
+      whose strengths are free (within that window two lines cannot swap places).
+      With several regions, the gas has one velocity field: it is first measured in the
+      least ambiguous region (widest window, ignoring tied lines) and every region is
+      then fitted near that velocity, pixel by pixel.
+      Other pixels use the aperture shape.
     local=False: every pixel uses the aperture shape, unshifted.
 
     Lines tied to a line in another region take ratio x that line's map (resampled).
     Returns ({component key: (image, region index)},
-             {region index: dict(rms=..., velocity=..., sigma=...)}), where velocity is the
-    per-pixel velocity and sigma the Gaussian width (NaN where the shifted aperture shape
-    was used, outside the signal mask, or if local=False).
+             {region index: dict(rms, velocity, sigma, note, limited, window_kms)}), where
+    velocity is the per-pixel velocity and sigma the Gaussian width (NaN where the shifted
+    aperture shape was used, outside the signal mask, or if local=False).
     Maps are signed and unclipped; units are the cube's unit x km/s.
     """
     from astropy.wcs import WCS
@@ -349,10 +354,24 @@ def component_maps(fit, cubes, noises, local=True, snr_cut=5., rows_per_chunk=32
     integral = fit['integral_kms']
     by_key = {q['key']: q for q in comps}
     targets = {q['tie'][0] for q in comps if q.get('tie')}
-    order = sorted(range(len(fit['regions'])), key=lambda i: 0 if any(q['region'] == i and q['key'] in targets for q in comps) else 1)
-    flux, diag = {}, {}
     gauss_area = np.sqrt(2*np.pi)
-    for i in order:
+    vv_ = np.arange(-5000., 5000., 1.); prof = shape(kind, vv_, p, template)
+    v_ap = float(np.sum(vv_*prof)/np.sum(prof)) if np.sum(prof) else 0.
+    flux = {}
+
+    def onto(image, src_cube, dst_cube):
+        ny, nx = dst_cube.data.shape[1:]
+        if src_cube.data.shape[1:] == (ny, nx) and WCS(src_cube.header).celestial.to_header() == WCS(dst_cube.header).celestial.to_header():
+            return image
+        return _resample(image, WCS(src_cube.header).celestial, WCS(dst_cube.header).celestial, (ny, nx))
+
+    def window(i, ignore_ties):
+        here = [q for q in comps if q['region'] == i and not (q.get('tie') and (ignore_ties or by_key[q['tie'][0]]['region'] == i))]
+        free_e = [q['row']['rest_GHz']/(1+fit['z']) for q in here if not q.get('tie')]
+        seps = [abs(C*(a_-b_)/a_) for n_, a_ in enumerate(free_e) for b_ in free_e[n_+1:]]
+        return (min(.5*min(seps), fit.get('vmax', 300.)) if seps else fit.get('vmax', 300.)), bool(seps)
+
+    def region_pass(i, reference=None, ignore_external=False):
         r = fit['regions'][i]; cube = cubes[i]
         lo, hi = r['lo'], r['hi']
         freq = np.asarray(cube.frequency[lo:hi+1], float)
@@ -362,15 +381,9 @@ def component_maps(fit, cubes, noises, local=True, snr_cut=5., rows_per_chunk=32
         vel = {k: C*(e-freq)/e for k, e in expected.items()}
         free_keys = [q['key'] for q in here if not q.get('tie')]
         same = [q for q in here if q.get('tie') and by_key[q['tie'][0]]['region'] == i]
-        other = [q for q in here if q.get('tie') and by_key[q['tie'][0]]['region'] != i]
+        other = [] if ignore_external else [q for q in here if q.get('tie') and by_key[q['tie'][0]]['region'] != i]
         w = 1/np.asarray(noises[i][lo:hi+1], float)
-        partner = {}
-        for q in other:
-            t = by_key[q['tie'][0]]; src = flux[t['key']]; pc = cubes[t['region']]
-            if pc.data.shape[1:] == (ny, nx) and WCS(pc.header).celestial.to_header() == WCS(cube.header).celestial.to_header():
-                partner[q['key']] = q['tie'][1]*src
-            else:
-                partner[q['key']] = q['tie'][1]*_resample(src, WCS(pc.header).celestial, WCS(cube.header).celestial, (ny, nx))
+        partner = {q['key']: q['tie'][1]*onto(flux[q['tie'][0]], cubes[by_key[q['tie'][0]]['region']], cube) for q in other}
 
         def design(profile_of, norm):
             """Columns for one shape; ties in this region merged. profile_of(key) -> column."""
@@ -381,36 +394,16 @@ def component_maps(fit, cubes, noises, local=True, snr_cut=5., rows_per_chunk=32
             fixed_cols = [(q['key'], profile_of(q['key'])/norm) for q in other]   # partner maps are fluxes
             return X, fixed_cols
 
-        def solve(X, fixed_cols, D, rows):
-            fixed = np.zeros_like(D)
-            for k, col in fixed_cols:
-                fixed += np.outer(col, np.nan_to_num(partner[k][rows].ravel()))
-            A = np.linalg.pinv(X*w[:, None])@((D-fixed)*w[:, None])
-            resid = D-fixed-X@A
-            return A, np.sum((resid*w[:, None])**2, axis=0), resid
-
-        # Aperture shape (fixed) for every pixel.
         Xa, fa = design(lambda k: shape(kind, vel[k], p, template), integral)
-        # Local mode: one Gaussian per pixel, velocity and width searched on a grid. The
-        # velocity is searched around the aperture velocity, within half the smallest
-        # separation between lines whose strengths are free here: within that window two
-        # blended lines cannot swap places. (Tied lines move with their partner, so they do
-        # not limit the window.) Lines closer than the velocity spread are only separable
-        # per pixel through a tie.
         dv = C*abs(freq[1]-freq[0])/freq[0]; span = C*abs(freq[-1]-freq[0])/freq[0]
         sgrid = np.geomspace(max(1.5*dv, 5.), max(span/4, 3*dv), 24)
-        vv_ = np.arange(-5000., 5000., 1.); prof = shape(kind, vv_, p, template)
-        v_ap = float(np.sum(vv_*prof)/np.sum(prof)) if np.sum(prof) else 0.
-        free_e = [expected[k] for k in free_keys]
-        seps = [abs(C*(a_-b_)/a_) for n_, a_ in enumerate(free_e) for b_ in free_e[n_+1:]]
-        half = min(.5*min(seps), fit.get('vmax', 300.)) if seps else fit.get('vmax', 300.)
+        half, has_seps = window(i, False)
         step = max(dv, 8.)
-        vgrid = v_ap+(np.arange(-half, half+1e-9, step) if half > step else np.array([0.]))
-        separable_note = (f'per-pixel velocity searched within ±{half:.0f} km/s of the aperture velocity '
-                          f'(half the smallest separation between free lines)') if seps else 'per-pixel velocity searched freely (one free line)'
+        offsets = np.arange(-half, half+1e-9, step) if half > step else np.array([0.])
+        near = min(half, max(3*step, 30.))   # search half-width around a reference velocity
+        near_offsets = np.arange(-near, near+1e-9, step) if near > step else np.array([0.])
         maps = {k: np.full((ny, nx), np.nan) for k in free_keys}
         rms_map = np.full((ny, nx), np.nan); vmap = np.full((ny, nx), np.nan); smap = np.full((ny, nx), np.nan)
-        collected = []
         # Signal cut: per-pixel noise = robust spread of the aperture-shape fit residual in that
         # pixel; a sum over correlated channels is wider than sqrt(N) x that, so the S/N is
         # divided by a factor measured on the same number of line-free channels (if any).
@@ -425,13 +418,21 @@ def component_maps(fit, cubes, noises, local=True, snr_cut=5., rows_per_chunk=32
             spread = 1.4826*np.nanmedian(np.abs(z_-np.nanmedian(z_)))
             if np.isfinite(spread) and spread > 1:
                 correlation = float(spread)
+        collected = []
         for y0 in range(0, ny, rows_per_chunk):
-            y1 = min(ny, y0+rows_per_chunk); rows = slice(y0, y1)
+            y1 = min(ny, y0+rows_per_chunk)
             D = np.asarray(cube.data[lo:hi+1, y0:y1, :], dtype=float).reshape(len(freq), -1)
             blank = ~np.all(np.isfinite(D), axis=0); D = np.where(np.isfinite(D), D, 0.)
-            A, chi, resid = solve(Xa, fa, D, (rows, slice(None)))
-            amps = [A[j]*integral for j in range(len(free_keys))]
-            rms = np.sqrt(np.mean(resid**2, axis=0)); vv = np.full(D.shape[1], np.nan); ss = vv.copy()
+            fixed = np.zeros_like(D)
+            for k, col in fa:
+                fixed += np.outer(col, np.nan_to_num(partner[k][y0:y1].ravel()))
+            A = np.linalg.pinv(Xa*w[:, None])@((D-fixed)*w[:, None])
+            resid = D-fixed-Xa@A
+            rms = np.sqrt(np.mean(resid**2, axis=0)); rms[blank] = np.nan
+            rms_map[y0:y1] = rms.reshape(y1-y0, nx)
+            for j, k in enumerate(free_keys):
+                a = A[j]*integral; a[blank] = np.nan
+                maps[k][y0:y1] = a.reshape(y1-y0, nx)
             if local:
                 pix_noise = 1.4826*np.median(np.abs(resid-np.median(resid, axis=0)), axis=0)
                 with np.errstate(divide='ignore', invalid='ignore'):
@@ -439,60 +440,83 @@ def component_maps(fit, cubes, noises, local=True, snr_cut=5., rows_per_chunk=32
                 sig = (snr > snr_cut) & ~blank
                 if sig.any():
                     collected.append((np.flatnonzero(sig)+y0*nx, D[:, sig]))
-            rms[blank] = np.nan
-            rms_map[y0:y1] = rms.reshape(y1-y0, nx); vmap[y0:y1] = vv.reshape(y1-y0, nx); smap[y0:y1] = ss.reshape(y1-y0, nx)
-            for j, k in enumerate(free_keys):
-                a = amps[j].copy(); a[blank] = np.nan
-                maps[k][y0:y1] = a.reshape(y1-y0, nx)
+        limited = False
         if collected:
-            # One grid pass over every pixel with signal (shared Gaussian, velocity and width per pixel).
             pix = np.concatenate([c[0] for c in collected]); Ds = np.concatenate([c[1] for c in collected], axis=1)
             m = Ds.shape[1]; nf = len(free_keys); nb = Xa.shape[1]-nf
             signs = np.array([1 if by_key[k]['sign'] == 'Emission' else -1 for k in free_keys])
             subsets = [list(c) for n_ in range(nf+1) for c in itertools.combinations(range(nf), n_)] if nf <= 6 else [list(range(nf))]
             fixed_amp = {k: np.nan_to_num(partner[k].ravel()[pix]) for k in partner}
-            best = np.full(m, np.inf); bA = np.zeros((nf, m)); brms = np.zeros(m); bv = np.zeros(m); bs = np.zeros(m)
-            Dw = Ds*w[:, None]
-            candidates = []
-            for v0 in vgrid:
-                candidates += [(v0, s0, (lambda k, v0=v0, s0=s0: shape('gauss', vel[k], (v0, s0))), s0*gauss_area) for s0 in sgrid]
-                candidates.append((v0, np.nan, (lambda k, d=v0-v_ap: shape(kind, vel[k]-d, p, template)), integral))
-            for v0, s0, profile_of, norm in candidates:
-                X, fc = design(profile_of, norm)
-                Dr = Ds.copy()
-                for k, col in fc:
-                    Dr -= np.outer(col, fixed_amp[k])
-                Drw = Dr*w[:, None]
-                for subset in subsets:
-                    cols = subset+list(range(nf, nf+nb))
-                    Xc = X[:, cols]
-                    Ag = np.linalg.pinv(Xc*w[:, None])@Drw
-                    rg = Dr-Xc@Ag
-                    cg = np.sum((rg*w[:, None])**2, axis=0)
-                    if subset:   # strengths keep the line's sign, as in the aperture fit
-                        cg = np.where(np.all(Ag[:len(subset)]*signs[subset][:, None] >= 0, axis=0), cg, np.inf)
-                    better = cg < best
-                    if not better.any():
-                        continue
-                    best = np.where(better, cg, best)
-                    full = np.zeros((nf, int(better.sum())))
-                    if subset:
-                        full[subset] = Ag[:len(subset), better]*norm
-                    bA[:, better] = full
-                    brms[better] = np.sqrt(np.mean(rg[:, better]**2, axis=0)); bv[better] = v0; bs[better] = s0
+            bA = np.zeros((nf, m)); brms = np.zeros(m); bv = np.zeros(m); bs = np.zeros(m)
+            # Pixels are grouped by the velocity they are searched around.
+            ref = reference.ravel()[pix] if reference is not None else np.full(m, np.nan)
+            centre = np.where(np.isfinite(ref), np.round(ref/step)*step, np.nan)
+            groups = {}
+            for n_, c_ in enumerate(centre):
+                groups.setdefault(None if not np.isfinite(c_) else float(c_), []).append(n_)
+            for c_, members in groups.items():
+                members = np.array(members)
+                vgrid = v_ap+offsets if c_ is None else c_+near_offsets
+                Dg = Ds[:, members]; best = np.full(len(members), np.inf)
+                for v0 in vgrid:
+                    candidates = [(s0, (lambda k, v0=v0, s0=s0: shape('gauss', vel[k], (v0, s0))), s0*gauss_area) for s0 in sgrid]
+                    candidates.append((np.nan, (lambda k, d=v0-v_ap: shape(kind, vel[k]-d, p, template)), integral))
+                    for s0, profile_of, norm in candidates:
+                        X, fc = design(profile_of, norm)
+                        Dr = Dg.copy()
+                        for k, col in fc:
+                            Dr -= np.outer(col, fixed_amp[k][members])
+                        Drw = Dr*w[:, None]
+                        for subset in subsets:
+                            cols = subset+list(range(nf, nf+nb))
+                            Xc = X[:, cols]
+                            Ag = np.linalg.pinv(Xc*w[:, None])@Drw
+                            rg = Dr-Xc@Ag
+                            cg = np.sum((rg*w[:, None])**2, axis=0)
+                            if subset:   # strengths keep the line's sign, as in the aperture fit
+                                cg = np.where(np.all(Ag[:len(subset)]*signs[subset][:, None] >= 0, axis=0), cg, np.inf)
+                            better = cg < best
+                            if not better.any():
+                                continue
+                            best = np.where(better, cg, best)
+                            idx = members[better]
+                            full = np.zeros((nf, len(idx)))
+                            if subset:
+                                full[subset] = Ag[:len(subset), better]*norm
+                            bA[:, idx] = full
+                            brms[idx] = np.sqrt(np.mean(rg[:, better]**2, axis=0)); bv[idx] = v0; bs[idx] = s0
             for j, k in enumerate(free_keys):
                 maps[k].ravel()[pix] = bA[j]
             rms_map.ravel()[pix] = brms; vmap.ravel()[pix] = bv; smap.ravel()[pix] = bs
-            # Evidence that the velocity field reaches beyond the window: many pixels at its edge.
-            at_edge = np.abs(bv-v_ap) >= half-step/2 if seps else np.zeros(m, bool)
-            limited = bool(seps) and m >= 10 and at_edge.mean() > .1
+            # Evidence that the velocity field reaches beyond the window: many pixels at its edge
+            # (only meaningful without a reference velocity).
+            free_search = ~np.isfinite(centre)
+            if has_seps and free_search.sum() >= 10:
+                limited = bool((np.abs(bv[free_search]-v_ap) >= half-step/2).mean() > .1)
+        if reference is not None:
+            note = f'per-pixel velocity searched within ±{near:.0f} km/s of the velocity field measured in the least ambiguous window'
+        elif has_seps:
+            note = f'per-pixel velocity searched within ±{half:.0f} km/s of the aperture velocity (half the smallest separation between free lines)'
         else:
-            limited = False
-        for k in free_keys:
-            flux[k] = maps[k]
+            note = 'per-pixel velocity searched freely (one free line)'
+        out = {k: maps[k] for k in free_keys}
         for q in same:
-            flux[q['key']] = q['tie'][1]*maps[q['tie'][0]]
+            out[q['key']] = q['tie'][1]*maps[q['tie'][0]]
         for q in other:
-            flux[q['key']] = np.where(np.isnan(rms_map), np.nan, partner[q['key']])
-        diag[i] = dict(rms=rms_map, velocity=vmap, sigma=smap, note=separable_note if local else 'aperture shape in every pixel', limited=bool(local and limited), window_kms=float(half))
+            out[q['key']] = np.where(np.isnan(rms_map), np.nan, partner[q['key']])
+        return out, dict(rms=rms_map, velocity=vmap, sigma=smap, note=note if local else 'aperture shape in every pixel',
+                         limited=bool(local and limited), window_kms=float(near if reference is not None else half))
+
+    n = len(fit['regions'])
+    reference, ref_region = None, None
+    if local and n > 1:
+        ref_region = max(range(n), key=lambda i: (window(i, True)[0], sum(abs(q['flux']) for q in comps if q['region'] == i and not q.get('tie'))))
+        _, d0 = region_pass(ref_region, ignore_external=True)
+        reference = d0['velocity']
+    order = sorted(range(n), key=lambda i: 0 if any(q['region'] == i and q['key'] in targets for q in comps) else 1)
+    diag = {}
+    for i in order:
+        ref_i = onto(reference, cubes[ref_region], cubes[i]) if reference is not None else None
+        out, diag[i] = region_pass(i, ref_i)
+        flux.update(out)
     return {q['key']: (flux[q['key']], q['region']) for q in comps}, diag
