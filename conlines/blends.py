@@ -321,7 +321,7 @@ def _resample(image, wcs_from, wcs_to, shape_to):
     return out.reshape(shape_to)
 
 
-def component_maps(fit, cubes, noises, local=True, snr_cut=3., rows_per_chunk=32):
+def component_maps(fit, cubes, noises, local=True, snr_cut=5., rows_per_chunk=32):
     """One integrated-intensity map per fitted line, from a per-pixel fit.
 
     cubes: region index -> Cube (the region's spectral window); noises: region index -> per-channel noise.
@@ -329,17 +329,19 @@ def component_maps(fit, cubes, noises, local=True, snr_cut=3., rows_per_chunk=32
     offset), exactly as for the aperture spectrum, in one of two ways:
 
     local=True (default): in pixels with signal (|integrated S/N| > snr_cut over the
-      fitted channels) all lines share ONE Gaussian whose velocity and width are chosen
-      per pixel (grid search). This follows rotation and other velocity gradients;
-      with a fixed shape, a line shifted by the local velocity field would leak into
-      its blended neighbours (a positive/negative pattern across the source).
-      Other pixels use the aperture shape.
+      fitted channels) all lines share one shape whose velocity follows the pixel:
+      either a Gaussian with its own velocity and width, or the aperture shape shifted
+      to the pixel's velocity (keeps double-peaked, self-absorbed profiles at the
+      nucleus), whichever fits better. This follows rotation and other velocity
+      gradients; with a fixed shape, a line shifted by the local velocity field would
+      leak into its blended neighbours. Other pixels use the aperture shape.
     local=False: every pixel uses the aperture shape, unshifted.
 
     Lines tied to a line in another region take ratio x that line's map (resampled).
     Returns ({component key: (image, region index)},
-             {region index: dict(rms=..., velocity=..., sigma=...)}), where velocity and
-    sigma are the per-pixel shared Gaussian (NaN outside the signal mask or if local=False).
+             {region index: dict(rms=..., velocity=..., sigma=...)}), where velocity is the
+    per-pixel velocity and sigma the Gaussian width (NaN where the shifted aperture shape
+    was used, outside the signal mask, or if local=False).
     Maps are signed and unclipped; units are the cube's unit x km/s.
     """
     from astropy.wcs import WCS
@@ -409,6 +411,20 @@ def component_maps(fit, cubes, noises, local=True, snr_cut=3., rows_per_chunk=32
         maps = {k: np.full((ny, nx), np.nan) for k in free_keys}
         rms_map = np.full((ny, nx), np.nan); vmap = np.full((ny, nx), np.nan); smap = np.full((ny, nx), np.nan)
         collected = []
+        # Signal cut: per-pixel noise = robust spread of the aperture-shape fit residual in that
+        # pixel; a sum over correlated channels is wider than sqrt(N) x that, so the S/N is
+        # divided by a factor measured on the same number of line-free channels (if any).
+        nchan = cube.data.shape[0]
+        outside = [c for c in range(max(0, lo-40), lo)]+[c for c in range(hi+1, min(nchan, hi+41))]
+        correlation = 1.
+        if len(outside) >= 10:
+            side = np.asarray(cube.data[outside], dtype=float)
+            side_noise = 1.4826*np.nanmedian(np.abs(side-np.nanmedian(side, axis=0)), axis=0)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                z_ = np.nansum(side, axis=0)/(side_noise*np.sqrt(len(outside)))
+            spread = 1.4826*np.nanmedian(np.abs(z_-np.nanmedian(z_)))
+            if np.isfinite(spread) and spread > 1:
+                correlation = float(spread)
         for y0 in range(0, ny, rows_per_chunk):
             y1 = min(ny, y0+rows_per_chunk); rows = slice(y0, y1)
             D = np.asarray(cube.data[lo:hi+1, y0:y1, :], dtype=float).reshape(len(freq), -1)
@@ -417,7 +433,9 @@ def component_maps(fit, cubes, noises, local=True, snr_cut=3., rows_per_chunk=32
             amps = [A[j]*integral for j in range(len(free_keys))]
             rms = np.sqrt(np.mean(resid**2, axis=0)); vv = np.full(D.shape[1], np.nan); ss = vv.copy()
             if local:
-                snr = np.abs(np.sum(D, axis=0))/np.sqrt(np.sum(1/w**2))
+                pix_noise = 1.4826*np.median(np.abs(resid-np.median(resid, axis=0)), axis=0)
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    snr = np.abs(np.sum(D, axis=0))/(pix_noise*np.sqrt(len(freq))*correlation)
                 sig = (snr > snr_cut) & ~blank
                 if sig.any():
                     collected.append((np.flatnonzero(sig)+y0*nx, D[:, sig]))
@@ -435,30 +453,33 @@ def component_maps(fit, cubes, noises, local=True, snr_cut=3., rows_per_chunk=32
             fixed_amp = {k: np.nan_to_num(partner[k].ravel()[pix]) for k in partner}
             best = np.full(m, np.inf); bA = np.zeros((nf, m)); brms = np.zeros(m); bv = np.zeros(m); bs = np.zeros(m)
             Dw = Ds*w[:, None]
+            candidates = []
             for v0 in vgrid:
-                for s0 in sgrid:
-                    X, fc = design(lambda k, v0=v0, s0=s0: shape('gauss', vel[k], (v0, s0)), s0*gauss_area)
-                    Dr = Ds.copy()
-                    for k, col in fc:
-                        Dr -= np.outer(col, fixed_amp[k])
-                    Drw = Dr*w[:, None]
-                    for subset in subsets:
-                        cols = subset+list(range(nf, nf+nb))
-                        Xc = X[:, cols]
-                        Ag = np.linalg.pinv(Xc*w[:, None])@Drw
-                        rg = Dr-Xc@Ag
-                        cg = np.sum((rg*w[:, None])**2, axis=0)
-                        if subset:   # strengths keep the line's sign, as in the aperture fit
-                            cg = np.where(np.all(Ag[:len(subset)]*signs[subset][:, None] >= 0, axis=0), cg, np.inf)
-                        better = cg < best
-                        if not better.any():
-                            continue
-                        best = np.where(better, cg, best)
-                        full = np.zeros((nf, int(better.sum())))
-                        if subset:
-                            full[subset] = Ag[:len(subset), better]*s0*gauss_area
-                        bA[:, better] = full
-                        brms[better] = np.sqrt(np.mean(rg[:, better]**2, axis=0)); bv[better] = v0; bs[better] = s0
+                candidates += [(v0, s0, (lambda k, v0=v0, s0=s0: shape('gauss', vel[k], (v0, s0))), s0*gauss_area) for s0 in sgrid]
+                candidates.append((v0, np.nan, (lambda k, d=v0-v_ap: shape(kind, vel[k]-d, p, template)), integral))
+            for v0, s0, profile_of, norm in candidates:
+                X, fc = design(profile_of, norm)
+                Dr = Ds.copy()
+                for k, col in fc:
+                    Dr -= np.outer(col, fixed_amp[k])
+                Drw = Dr*w[:, None]
+                for subset in subsets:
+                    cols = subset+list(range(nf, nf+nb))
+                    Xc = X[:, cols]
+                    Ag = np.linalg.pinv(Xc*w[:, None])@Drw
+                    rg = Dr-Xc@Ag
+                    cg = np.sum((rg*w[:, None])**2, axis=0)
+                    if subset:   # strengths keep the line's sign, as in the aperture fit
+                        cg = np.where(np.all(Ag[:len(subset)]*signs[subset][:, None] >= 0, axis=0), cg, np.inf)
+                    better = cg < best
+                    if not better.any():
+                        continue
+                    best = np.where(better, cg, best)
+                    full = np.zeros((nf, int(better.sum())))
+                    if subset:
+                        full[subset] = Ag[:len(subset), better]*norm
+                    bA[:, better] = full
+                    brms[better] = np.sqrt(np.mean(rg[:, better]**2, axis=0)); bv[better] = v0; bs[better] = s0
             for j, k in enumerate(free_keys):
                 maps[k].ravel()[pix] = bA[j]
             rms_map.ravel()[pix] = brms; vmap.ravel()[pix] = bv; smap.ravel()[pix] = bs

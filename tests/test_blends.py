@@ -79,7 +79,7 @@ def test_component_maps_recover_per_pixel_amplitudes_and_ties():
     yy,xx=np.indices((9,9));amp1=.05*np.exp(-((xx-4)**2+(yy-4)**2)/6);amp2=.02*(xx/8)
     e1,e2=hcn/(1+Z),vib/(1+Z)
     prof=lambda e:np.exp(-.5*(((C*(e-f)/e)-0)/40)**2)
-    data=(prof(e1)[:,None,None]*amp1+prof(e2)[:,None,None]*amp2).astype('float32')
+    data=(prof(e1)[:,None,None]*amp1+prof(e2)[:,None,None]*amp2+np.random.default_rng(5).normal(0,1e-4,(120,9,9))).astype('float32')
     h=fits.Header();h['CTYPE1']='RA---TAN';h['CTYPE2']='DEC--TAN';h['CRPIX1']=5;h['CRPIX2']=5;h['CRVAL1']=10;h['CRVAL2']=5;h['CDELT1']=-1e-5;h['CDELT2']=1e-5
     cube=SimpleNamespace(data=data,frequency=f,header=h)
     regions=[dict(id='F',spw='a',freq=f,spectrum=data[:,4,4],noise=np.full(120,1e-3),lo=0,hi=119)]
@@ -88,7 +88,7 @@ def test_component_maps_recover_per_pixel_amplitudes_and_ties():
     maps,diag=blends.component_maps(fit,{0:cube},{0:np.full(120,1e-3)},local=False)
     assert np.allclose(maps['A'][0]/integral,amp1,atol=1e-3) and np.allclose(maps['B'][0]/integral,amp2,atol=1e-3)
     maps,diag=blends.component_maps(fit,{0:cube},{0:np.full(120,1e-3)})
-    sig=np.isfinite(diag[0]['velocity'])
+    sig=np.isfinite(diag[0]['velocity']);assert sig.sum()>=20
     assert np.allclose(maps['A'][0][sig]/integral,amp1[sig],rtol=.06,atol=2e-4) and np.allclose(maps['B'][0][sig]/integral,amp2[sig],rtol=.06,atol=2e-4)
 
 
@@ -98,7 +98,7 @@ def test_local_maps_follow_a_velocity_gradient_without_leaking_into_the_blend():
     f=channels(a_,160)
     yy,xx=np.indices((11,11));amp=.05*np.exp(-((xx-5)**2+(yy-5)**2)/8);vfield=(xx-5)*18.   # rotation +-90 km/s, within half the 210 km/s separation
     ea=a_/(1+Z);va=C*(ea-f)/ea
-    data=(np.exp(-.5*((va[:,None,None]-vfield)/40)**2)*amp).astype('float32')    # only line A is present
+    data=(np.exp(-.5*((va[:,None,None]-vfield)/40)**2)*amp+np.random.default_rng(6).normal(0,1e-4,(160,11,11))).astype('float32')    # only line A is present
     h=fits.Header();h['CTYPE1']='RA---TAN';h['CTYPE2']='DEC--TAN';h['CRPIX1']=6;h['CRPIX2']=6;h['CRVAL1']=10;h['CRVAL2']=5;h['CDELT1']=-1e-5;h['CDELT2']=1e-5
     cube=SimpleNamespace(data=data,frequency=f,header=h)
     aperture=data[:,4:7,4:7].mean(axis=(1,2))
@@ -112,6 +112,6 @@ def test_local_maps_follow_a_velocity_gradient_without_leaking_into_the_blend():
     assert abs(np.nansum(local['A'][0])/np.nansum(amp*np.sqrt(2*np.pi)*40)-1)<.1   # A's flux is kept
     assert not diag[0]['limited']
     # A velocity field beyond half the separation is reported, not silently mis-split.
-    steep=(np.exp(-.5*((va[:,None,None]-(xx-5)*45.)/40)**2)*amp).astype('float32')
+    steep=(np.exp(-.5*((va[:,None,None]-(xx-5)*45.)/40)**2)*amp+np.random.default_rng(7).normal(0,1e-4,(160,11,11))).astype('float32')
     _,diag2=blends.component_maps(fit,{0:SimpleNamespace(data=steep,frequency=f,header=h)},{0:np.full(160,1e-3)})
     assert diag2[0]['limited']

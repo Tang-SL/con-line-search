@@ -421,16 +421,19 @@ l=1f (≈400 km/s). The centroid of such a feature means nothing, so:
    trade flux between them) or *Set by tie*. **Use this fit as the
    identification** records the main and blended lines as reviewed.
 3. **Per-line maps (Step 5).** Every pixel is fitted with the same lines. In
-   pixels with signal (|S/N| > 3 over the fitted channels) all lines share one
-   Gaussian whose velocity and width are fitted per pixel, so rotation does not
-   leak flux into a blended neighbour; its velocity is searched within half the
-   smallest separation between lines whose strengths are free there (tied lines
-   do not count), and strengths keep their sign. Other pixels use the aperture
-   shape. The bundle also holds maps of the per-pixel velocity, width and
-   residual RMS. Lines closer than the velocity spread can only be split per
-   pixel through a tie; the app warns when the window may be too small, and the
-   FITS history names lines that are not separable. *Extra maps over part of a
-   line* integrate any channel sub-range (e.g. blue and red wings).
+   pixels with signal (calibrated integrated S/N > 5) all lines share one shape
+   that follows the pixel's velocity: a Gaussian with its own velocity and width,
+   or the aperture shape shifted to that velocity (keeps self-absorbed,
+   double-peaked profiles at the nucleus), whichever fits better. So rotation does
+   not leak flux into a blended neighbour. The velocity is searched within half
+   the smallest separation between lines whose strengths are free there (tied
+   lines do not count), and strengths keep their sign. Other pixels use the
+   aperture shape, signed and unclipped. The bundle also holds maps of the
+   per-pixel velocity, width and residual RMS. Lines closer than the velocity
+   spread can only be split per pixel through a tie; the app warns when many
+   pixels sit at the edge of the velocity window, and the FITS history names lines
+   that are not separable. *Extra maps over part of a line* integrate any channel
+   sub-range (e.g. blue and red wings).
 
 Example (IRAS 17208-0014, central 0.32″ aperture, cz = 12824 km/s): SPW27's
 feature (channels 143–357) holds HCN 3–2 and HCN v₂=1 l=1e; SPW25's holds HCO⁺
