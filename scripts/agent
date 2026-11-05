@@ -1,0 +1,21 @@
+#!/bin/bash
+# Line-identification agent toolkit: scripts/agent <step> --run RUN_FOLDER [options]
+# (see scripts/agent -h). Uses the project's .venv; installs the toolkit's extra
+# packages on first use. SoFiA is taken from .local-tools/sofia when present.
+set -euo pipefail
+ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd)"
+PY="${CONLINES_PYTHON:-$ROOT/.venv/bin/python}"
+if [[ ! -x "$PY" ]]; then
+  echo "The project environment (.venv) is missing: start the app once (Start app.command) to create it." >&2
+  exit 1
+fi
+if ! "$PY" -c 'import astroquery, markdown, matplotlib' >/dev/null 2>&1; then
+  echo "Installing the agent toolkit's packages (astroquery, markdown) ..." >&2
+  "$PY" -m pip install -q "astroquery>=0.4.7" "markdown>=3.5" matplotlib >&2
+fi
+if [[ -z "${SOFIA_EXECUTABLE:-}" && -x "$ROOT/.local-tools/sofia" ]]; then
+  export SOFIA_EXECUTABLE="$ROOT/.local-tools/sofia"
+fi
+export MPLBACKEND=Agg
+cd "$ROOT"
+exec "$PY" -m conlines.agent "$@"

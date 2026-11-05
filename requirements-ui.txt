@@ -2,3 +2,5 @@
 streamlit>=1.45,<2
 plotly>=6,<7
 pytest>=8,<10
+astroquery>=0.4.7
+markdown>=3.5

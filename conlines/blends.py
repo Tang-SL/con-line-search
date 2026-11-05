@@ -150,12 +150,14 @@ def _solve(Xr, y, w, bounds):
     return res.x, float(np.sum(((y-Xr@res.x)*w)**2))
 
 
-def decompose(regions, components, kind='gauss', z=0., template=None, vmax=300., baseline=True, sigma0=None):
+def decompose(regions, components, kind='gauss', z=0., template=None, vmax=300., baseline=True, sigma0=None, assess=True, starts_override=None):
     """Fit the regions' spectra with a shared line shape placed at every component.
 
     regions: [dict(id, spw, freq, spectrum, noise)] (channel ranges of one or more features)
     components: [dict(key, row, expected_GHz, region, sign, tie=None or (key, ratio))]
     Returns amplitudes, uncertainties, integrated fluxes, Delta BIC per component and models.
+    assess=False skips the per-line refits (Delta BIC, verdicts), e.g. for noise Monte Carlo runs;
+    starts_override replaces the starting shapes (e.g. the best-fit shape of the observed data).
     """
     if not components:
         raise ValueError('Choose at least one line to fit.')
@@ -191,7 +193,7 @@ def decompose(regions, components, kind='gauss', z=0., template=None, vmax=300.,
                 best = fit
         return best.x
 
-    p = fit_shape(components, starts)
+    p = fit_shape(components, starts_override or starts)
     X = _columns(regions, components, kind, p, template)
     Xr, b, free, n_comp = _reduce(X, components, baseline, regions)
     a, chi2 = _solve(Xr, y, w, b)
@@ -226,21 +228,23 @@ def decompose(regions, components, kind='gauss', z=0., template=None, vmax=300.,
     for j, c in enumerate(components):
         dropped = {c['key']} | ({d['key'] for d in components if d.get('tie') and d['tie'][0] == c['key']} if not c.get('tie') else set())
         rest = [d for d in components if d['key'] not in dropped]
-        if rest:
+        if not assess:
+            chi2_0 = None
+        elif rest:
             p0 = fit_shape(rest, [list(np.clip(p, bounds[0]+1e-6, bounds[1]-1e-6))])
             Xr0, b0, _, _ = _reduce(_columns(regions, rest, kind, p0, template), rest, baseline, regions)
             _, chi2_0 = _solve(Xr0, y, w, b0)
         else:
             Xr0, b0, _, _ = _reduce(np.zeros((n, 0)), [], baseline, regions)
             _, chi2_0 = _solve(Xr0, y, w, b0)
-        delta_bic = chi2_0-chi2-(0 if c.get('tie') else np.log(n))
-        verdict = 'Needed' if delta_bic > 10 else 'Weak evidence' if delta_bic > 2 else 'Not needed'
+        delta_bic = chi2_0-chi2-(0 if c.get('tie') else np.log(n)) if chi2_0 is not None else None
+        verdict = ('not tested' if delta_bic is None else 'Needed' if delta_bic > 10 else 'Weak evidence' if delta_bic > 2 else 'Not needed')
         degenerate = [d['key'] for d in components if d['key'] != c['key'] and pos(d) != pos(c)
                       and corr[pos(c), pos(d)] < -.8 and d['region'] == c['region']]
         results.append(dict(key=c['key'], row=c['row'], region=c['region'], sign=c['sign'], tie=c.get('tie'),
                             amplitude=float(amp[j]), amplitude_error=float(amp_err[j]),
                             flux=float(amp[j]*integral), flux_error=float(amp_err[j]*abs(integral)),
-                            delta_bic=float(delta_bic), verdict=verdict, degenerate_with=degenerate))
+                            delta_bic=None if delta_bic is None else float(delta_bic), verdict=verdict, degenerate_with=degenerate))
     # Lines that can trade flux: test the group as a whole.
     def chi2_without(dropped):
         rest = [d for d in components if d['key'] not in dropped and not (d.get('tie') and d['tie'][0] in dropped)]
@@ -251,7 +255,7 @@ def decompose(regions, components, kind='gauss', z=0., template=None, vmax=300.,
             Xr0, b0, _, _ = _reduce(np.zeros((n, 0)), [], baseline, regions)
         return _solve(Xr0, y, w, b0)[1]
     for q in results:
-        if q['degenerate_with'] and q['verdict'] != 'Needed':
+        if assess and q['degenerate_with'] and q['verdict'] != 'Needed':
             group = {q['key'], *q['degenerate_with']}
             free_count = sum(1 for d in components if d['key'] in group and not d.get('tie'))
             if chi2_without(group)-chi2-free_count*np.log(n) > 10:
@@ -259,7 +263,7 @@ def decompose(regions, components, kind='gauss', z=0., template=None, vmax=300.,
     # A tied line is fixed by its partner: report that instead of a test it cannot pass on its own.
     verdicts = {q['key']: q['verdict'] for q in results}
     for q in results:
-        if q['tie']:
+        if q['tie'] and assess:
             q['verdict'] = 'Set by tie' if verdicts[q['tie'][0]] != 'Not needed' else 'Not needed (partner not needed)'
     names = {'gauss': ['velocity', 'width'], 'gauss2': ['main velocity', 'main width', 'second velocity', 'second width', 'second height'],
              'template': ['shift']}[kind]
@@ -280,7 +284,7 @@ def decompose(regions, components, kind='gauss', z=0., template=None, vmax=300.,
         models.append(dict(components=parts, offset=offset, total=total.tolist(),
                            residual=(np.asarray(r['spectrum'])-total).tolist()))
     return dict(kind=kind, params=[float(x) for x in p], template=template, z=float(z), baseline=baseline, at_bounds=at_bounds, vmax=float(vmax),
-                chi2=chi2, dof=int(n-k), reduced_chi2=float(chi2/max(n-k, 1)), n=n,
+                chi2=chi2, dof=int(n-k), reduced_chi2=float(chi2/max(n-k, 1)), n=n, bic=float(chi2+k*np.log(n)), n_parameters=int(k),
                 components=results, models=models, integral_kms=integral,
                 regions=[dict(id=r['id'], spw=r['spw'], lo=int(r['lo']), hi=int(r['hi'])) for r in regions])
 
