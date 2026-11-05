@@ -155,5 +155,11 @@ relying on any number here for a specific source, check the source's own literat
 - **When the fit is model-limited** (reduced χ² ≳ 2), noise robustness overstates certainty.
   Compare line shapes (one or two Gaussians, a template) and report the spread as a
   systematic error.
+- **Baseline and fit window.** For lines hundreds of km/s wide, a baseline fitted only on a
+  few channels beside the feature is degenerate with the broad components. A faint blended
+  line then absorbs the difference. Example from the toolkit's IRAS 17208-0014 test: HCN-vib
+  l=1f changed by 40% between 10 and 80 line-free channels per side. Fit with enough line-free
+  channels (default: a third of the feature width on each side), check the fitted baseline
+  against line-free channels measured directly, and report the change as a systematic.
 - **Prefer a weaker but robust claim**, e.g. "HCN-vib l=1f is clearly needed; the l=1e/l=1f
   ratio depends on the line-shape model", over a precise but fragile one.

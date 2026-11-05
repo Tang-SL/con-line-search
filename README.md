@@ -101,6 +101,51 @@ catalogue predicts a transition.
 
 No redistribution license for the project's original code has been selected yet.
 
+## Line-identification agent (Claude Code)
+
+The repository includes an agent that answers "which lines are in this object?" for a local
+folder of cubes or an ALMA project code. It runs in Claude Code on your Mac: open Claude Code in
+this folder and ask, for example:
+
+> What lines are in IRAS 17208-0014? The data are in /Users/tang/Documents/CONs/data/IRAS17208-0014.
+
+> Which molecular lines are in NGC 4418 in ALMA project <project code>?
+
+The skill `.claude/skills/line-id-agent/` tells Claude how to work:
+- `SKILL.md` is the procedure.
+- `playbook.md` holds the identification rules distilled from extragalactic line surveys and
+  the CON literature.
+
+At every step the agent asks two questions: *is this feature significant?* and *is this
+identification physically possible in this source?* It looks up the source in SIMBAD, NED and
+ADS, tests companion lines with LTE scaling, fits competing blend hypotheses, and ranks them by
+robustness to the noise. It finishes with a weblog (`runs/<target>_<date>/weblog/index.html`):
+plots for every step, the line solution with evidence and rejected alternatives, line
+properties (fluxes, L′, L) and moment and per-line maps as FITS.
+
+The tools are a command-line toolkit that can also be used directly:
+
+```bash
+scripts/agent -h                                   # steps
+scripts/agent data     --run runs/X --local DATA_DIR
+scripts/agent inspect  --run runs/X --z 0.0428
+scripts/agent context  --run runs/X --name "IRAS 17208-0014"
+scripts/agent detect   --run runs/X
+scripts/agent extract  --run runs/X
+scripts/agent catalog  --run runs/X --z 0.0428
+scripts/agent identify --run runs/X
+scripts/agent blend    --run runs/X --hypothesis hyps.json
+scripts/agent robust   --run runs/X --hypotheses hyps.json --n 100
+scripts/agent solve    --run runs/X --solution solution.json
+scripts/agent maps     --run runs/X
+scripts/agent report   --run runs/X
+```
+
+**Setup.** `scripts/agent` uses the app's `.venv` (start the app once) and installs `astroquery`
+and `markdown` on first use. For literature searches, put your NASA ADS API token in
+`~/.ads/dev_key` (or `export ADS_API_TOKEN=...`). Never paste the token into a chat or commit it;
+`.local-tools/ads_token` also works and is git-ignored.
+
 ## Local web interface
 
 ### Starting and stopping (macOS)

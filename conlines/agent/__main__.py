@@ -41,7 +41,8 @@ def main(argv=None):
     s = cmd('data'); s.add_argument('--local'); s.add_argument('--alma'); s.add_argument('--target'); s.add_argument('--list', action='store_true')
     s.add_argument('--download', action='store_true'); s.add_argument('--dest'); s.add_argument('--include-pb', action='store_true')
     s = cmd('inspect'); s.add_argument('--z', type=float)
-    s = cmd('context'); s.add_argument('--name'); s.add_argument('--extra-query', action='append', default=[]); s.add_argument('--rows', type=int, default=15)
+    s = cmd('context'); s.add_argument('--name'); s.add_argument('--z', type=float, help='redshift to use if NED/SIMBAD give none')
+    s.add_argument('--no-literature', action='store_true'); s.add_argument('--extra-query', action='append', default=[]); s.add_argument('--rows', type=int, default=15)
     s = cmd('ads'); s.add_argument('--query', required=True); s.add_argument('--rows', type=int, default=20); s.add_argument('--sort', default='citation_count desc')
     s = cmd('detect'); s.add_argument('--widths', type=int, nargs='+', default=[3, 5, 9]); s.add_argument('--clip', type=float, default=5.)
     s.add_argument('--mode', default='Both', choices=['Both', 'Emission', 'Absorption']); s.add_argument('--no-contsub', action='store_true')
@@ -119,14 +120,20 @@ def main(argv=None):
             except Exception as e:
                 out[label] = None; out[f'{label}_error'] = str(e)
         z = (out.get('ned') or {}).get('redshift') or (out.get('simbad') or {}).get('redshift')
+        out['z_source'] = 'NED' if (out.get('ned') or {}).get('redshift') else 'SIMBAD' if z else None
+        if not z and (a.z or run.state.get('z')):
+            z = a.z or run.state.get('z'); out['z_source'] = 'given (--z)' if a.z else 'run state'
         out['derived'] = context.derived(z, (out.get('ned') or {}).get('photometry'), max(r['beam_major_arcsec'] for r in inv)) if z else {}
         if (out.get('ned') or {}).get('photometry'):
             figs.sed(run.plot('sed'), out['ned']['photometry'], f"{name}: NED photometry")
         run.save('context', out)
         names = [n for n in [name, (out.get('simbad') or {}).get('main_id')] if n]
         aliases = [i.strip() for i in (out.get('simbad') or {}).get('ids', []) if i.strip().startswith(('IRAS', 'NGC', 'IC ', 'UGC', 'Arp', 'Mrk', 'ESO', 'Zw', 'CGCG'))][:3]
-        lit = context.literature(list(dict.fromkeys(names+aliases)), a.extra_query, a.rows)
-        run.save('literature', lit)
+        if not a.no_literature:
+            lit = context.literature(list(dict.fromkeys(names+aliases)), a.extra_query, a.rows)
+            run.save('literature', lit)
+        else:
+            lit = run.load('literature', {'queries': {}})
         run.update(target=name)
         run.log('context', f'{name}: z={z}', simbad_error=out.get('simbad_error'), ned_error=out.get('ned_error'))
         print(json.dumps({k: v for k, v in out.items() if k != 'ned'} | {'ned': {k: v for k, v in (out.get('ned') or {}).items() if k != 'photometry'}}, indent=1, default=str)[:3000])

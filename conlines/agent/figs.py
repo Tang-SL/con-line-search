@@ -19,10 +19,14 @@ def _save(fig, path):
 def _image(ax, image, title, centre=None, zoom=None, cmap='viridis', symmetric=False, label=None, marks=()):
     data = np.asarray(image, float)
     ny, nx = data.shape
-    finite = data[np.isfinite(data)]
+    view = data
+    if centre is not None and zoom:
+        cx, cy = centre; half = max(8, min(nx, ny)/(2*zoom))
+        view = data[max(0, int(cy-half)):int(cy+half)+1, max(0, int(cx-half)):int(cx+half)+1]
+    finite = view[np.isfinite(view)]
     if finite.size:
-        if symmetric:
-            v = np.nanpercentile(np.abs(finite), 99.5) or 1
+        if symmetric:            # colour scale from what is shown, so a compact source is not saturated
+            v = np.nanpercentile(np.abs(finite), 99.8) or 1
             vmin, vmax = -v, v
         else:
             vmin, vmax = np.nanpercentile(finite, [1, 99.7])
@@ -30,11 +34,10 @@ def _image(ax, image, title, centre=None, zoom=None, cmap='viridis', symmetric=F
         vmin, vmax = 0, 1
     h = ax.imshow(data, origin='lower', cmap=cmap, vmin=vmin, vmax=vmax, interpolation='nearest')
     if centre is not None and zoom:
-        cx, cy = centre; half = max(8, min(nx, ny)/(2*zoom))
         ax.set_xlim(cx-half, cx+half); ax.set_ylim(cy-half, cy+half)
     for x, y, style in marks:
         ax.plot(x, y, style, ms=9, mfc='none', mew=1.6)
-    ax.set_title(title); ax.set_xlabel('x (pixel)'); ax.set_ylabel('y (pixel)')
+    ax.set_title(title, fontsize=9); ax.set_xlabel('x (pixel)'); ax.set_ylabel('y (pixel)')
     cb = plt.colorbar(h, ax=ax, fraction=.046, pad=.03)
     if label:
         cb.set_label(label)
@@ -44,7 +47,7 @@ def _image(ax, image, title, centre=None, zoom=None, cmap='viridis', symmetric=F
 def inspection(path, cube, info, median_map, peak_snr, z=None):
     fig, ax = plt.subplots(1, 3, figsize=(15, 4.2), gridspec_kw=dict(width_ratios=[1, 1, 1.6]))
     lx, ly = info['line_peak_pixel']; cx, cy = info['continuum_pixel']
-    _image(ax[0], median_map, 'Continuum estimate (25th percentile over channels)', (cx, cy), 3, label=info['unit'], marks=[(cx, cy, 'w+')])
+    _image(ax[0], median_map, 'Continuum estimate (lower of the two band-edge means)', (cx, cy), 3, label=info['unit'], marks=[(cx, cy, 'w+')])
     _image(ax[1], peak_snr, 'Peak |S/N| over channels (line emission)', (lx, ly), 3, cmap='magma', marks=[(lx, ly, 'c+')])
     f = cube.frequency
     for (x, y), colour, name in [((lx, ly), TEAL, f'brightest line pixel {lx},{ly}'), ((cx, cy), GREY, f'continuum peak {cx},{cy}')]:
@@ -133,8 +136,12 @@ def blend(path, fit, regions, names, unit):
         m = fit['models'][i]; f = reg['freq']
         ax.step(f, reg['spectrum'], where='mid', color=TEAL, lw=.9, label='aperture spectrum')
         ax.plot(f, m['total'], color='k', lw=1.4, label='total fit')
-        for j, (k, v) in enumerate(m['components'].items()):
-            ax.plot(f, np.array(v)+m['offset'], '--', color=COLOURS[j % len(COLOURS)], lw=1.1, label=names.get(k, k))
+        base = np.broadcast_to(np.asarray(m['offset'], float), np.shape(f))
+        for j, (k, v) in enumerate(m['components'].items()):      # each line on its own (baseline not added)
+            ax.plot(f, np.array(v), '--', color=COLOURS[j % len(COLOURS)], lw=1.1, label=names.get(k, k))
+        if np.any(base != 0):
+            ax.plot(f, base, ':', color=GREY, lw=1, label='baseline')
+        ax.axhline(0, color='#94a3b8', lw=.5)
         ax.set_title(reg['id']); ax.set_ylabel(unit); ax.legend(fontsize=7)
         axr.step(f, m['residual'], where='mid', color=GREY, lw=.8)
         axr.fill_between(f, -3*np.asarray(reg['noise']), 3*np.asarray(reg['noise']), color='#cbd5e1', alpha=.6, step='mid')
@@ -153,12 +160,16 @@ def robustness(path, tallies, title):
     return _save(fig, path)
 
 
-def maps(path, images, titles, centre=None, zoom=3, unit='Jy/beam km/s'):
+def maps(path, images, titles, centre=None, zoom=3, unit='Jy/beam km/s', units=None):
+    """Moment / blend-fit maps; panels whose unit is km/s are drawn as velocity fields."""
     n = len(images)
+    units = list(units) if units else [unit]*n
     cols = min(4, n); rows = int(np.ceil(n/cols))
-    fig, axes = plt.subplots(rows, cols, figsize=(4.4*cols, 3.8*rows), squeeze=False)
-    for ax, image, title in zip(axes.flat, images, titles):
-        _image(ax, image, title, centre, zoom, cmap='RdBu_r', symmetric=True, label=unit)
+    fig, axes = plt.subplots(rows, cols, figsize=(4.6*cols, 4.0*rows), squeeze=False, layout='constrained')
+    for ax, image, title, u in zip(axes.flat, images, titles, units):
+        velocity = u == 'km/s'
+        marks = [(centre[0], centre[1], 'k+')] if centre is not None else []
+        _image(ax, image, title, centre, zoom, cmap='coolwarm' if velocity else 'RdBu_r', symmetric=True, label=u or unit, marks=marks)
     for ax in list(axes.flat)[n:]:
         ax.axis('off')
     return _save(fig, path)

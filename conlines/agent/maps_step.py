@@ -2,7 +2,7 @@
 
 For every line in solution.json: a signed moment-0 map over the feature's channels (baseline
 fitted per pixel beside the line, nothing clipped), an intensity-weighted velocity map
-(moment 1, pixels with a 3σ moment-0 only) and, for features with a blend fit, one map per
+(moment 1, pixels with a 5σ moment-0 only) and, for features with a blend fit, one map per
 line from the per-pixel blend fit (conlines.blends.component_maps), plus its velocity field.
 """
 import json
@@ -35,7 +35,7 @@ def moment1(cube, lo, hi, rest, z, mom0):
     w = np.clip(data, 0, None) if np.nansum(mom0) >= 0 else np.clip(-data, 0, None)
     with np.errstate(invalid='ignore', divide='ignore'):
         m1 = np.nansum(w*v[:, None, None], axis=0)/np.nansum(w, axis=0)
-    m1[~(np.abs(mom0) > 3*err0)] = np.nan
+    m1[~(np.abs(mom0) > 5*err0)] = np.nan
     return m1, err0
 
 
@@ -65,7 +65,7 @@ def run(run, baseline='linear', zoom=4., local=True):
         path = run.product(f"{e['feature']}__{name}__mom0.fits"); fits.writeto(path, im.astype('float32'), h, overwrite=True); products.append(path.name)
         m1, err0 = moment1(cube, f['lo'], f['hi'], rest, z, im)
         path = run.product(f"{e['feature']}__{name}__mom1.fits")
-        fits.writeto(path, m1.astype('float32'), _header(cube, 'km/s', ['Intensity-weighted velocity relative to the redshift', 'Pixels with |mom0| > 3 sigma only']), overwrite=True)
+        fits.writeto(path, m1.astype('float32'), _header(cube, 'km/s', ['Intensity-weighted velocity relative to the redshift', 'Pixels with |mom0| > 5 sigma only']), overwrite=True)
         products.append(path.name)
         x, y = (float(v) for v in WCS(cube.header).celestial.world_to_pixel_values(pos['ra'], pos['dec'])) if pos else (None, None)
         panels.append(dict(images=[im, m1], titles=[f"{e['feature']} {h['LINEID']} [{e['status']}]: moment 0", 'moment 1 (km/s)'],
@@ -80,25 +80,25 @@ def run(run, baseline='linear', zoom=4., local=True):
             for i, r in enumerate(fit['regions']):
                 d = np.load(run.path/'cache'/f"spectrum_{r['spw']}.npz"); noises[i] = d['noise']
             maps, diag = blends.component_maps(fit, cubes_r, noises, local=local)
-            images, titles = [], []
+            images, titles, units = [], [], []
             for key, (img, i) in maps.items():
                 cube_i = cubes_r[i]; nm = fit['names'].get(key, key)
                 hh = _header(cube_i, cube_i.unit+' km/s', [f"Per-pixel blend fit {e['blend_fit']}: {nm}", diag[i]['note']])
                 hh['LINEID'] = nm.encode('ascii', 'replace').decode()[:60]
                 safe = ''.join(ch if ch.isalnum() else '_' for ch in nm)[:40]
                 p = run.product(f"{fit['regions'][i]['feature']}__{safe}__blendfit.fits"); fits.writeto(p, img.astype('float32'), hh, overwrite=True); products.append(p.name)
-                images.append(img); titles.append(f'{nm} (blend fit)')
+                images.append(img); titles.append(f'{nm} (blend fit)'); units.append(cube_i.unit+' km/s')
             for i, d in diag.items():
                 if np.isfinite(d['velocity']).any():
                     p = run.product(f"{fit['regions'][i]['feature']}__blendfit_velocity.fits")
                     fits.writeto(p, d['velocity'].astype('float32'), _header(cubes_r[i], 'km/s', [d['note']]), overwrite=True); products.append(p.name)
-                    images.append(d['velocity']); titles.append(f"{fit['regions'][i]['feature']}: per-pixel velocity (km/s)")
-            panels.append(dict(images=images, titles=titles, centre=(x, y), units=[None]*len(images), blend=e['blend_fit'],
+                    images.append(d['velocity']); titles.append(f"{fit['regions'][i]['feature']}: per-pixel velocity (km/s)"); units.append('km/s')
+            panels.append(dict(images=images, titles=titles, centre=(x, y), units=units, blend=e['blend_fit'],
                                warnings=[f"{fit['regions'][i]['feature']}: velocity field reaches the edge of the search window" for i, d in diag.items() if d.get('limited')]))
     plots = []
     for n, p in enumerate(panels):
         path = run.plot(f'maps_{n+1}')
-        figs.maps(path, p['images'], p['titles'], p['centre'] if p['centre'][0] is not None else None, zoom)
+        figs.maps(path, p['images'], p['titles'], p['centre'] if p['centre'][0] is not None else None, zoom, units=p['units'])
         plots.append(dict(plot=path.name, blend=p.get('blend'), warnings=p.get('warnings', [])))
     result = dict(products=products, plots=plots, baseline=baseline, local=local)
     run.save('maps', result)

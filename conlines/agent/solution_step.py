@@ -5,7 +5,8 @@ The agent writes its decision as JSON (one entry per feature):
     {"lines": [
       {"feature": "spw27-F006", "status": "secure",          # secure | tentative | unidentified
        "main":  {"species": "HCN, v = 0", "rest_GHz": 265.886434, "qns": "J=3-2"},
-       "blend": [{"species": "HCN, v2 = 1", "rest_GHz": 265.852709, "qns": "J=3-2 l=1e"}],
+       "blend": [{"species": "HCN, v2 = 1", "rest_GHz": 265.852709, "qns": "J=3-2 l=1e",
+                  "status": "tentative"}],                   # optional per-line status (default: the feature's)
        "blend_fit": "HCN+vib, e=f",                          # optional: name of a blend fit
        "evidence": "why this is right (significance, companions, literature)",
        "alternatives": [{"solution": "CH2NH ...", "why_not": "..."}]}]}
@@ -78,7 +79,10 @@ def run(run, solution):
                     flux, err, share, verdict = q['flux'], q['flux_error'], q.get('fraction'), q['verdict']
             ap = flux*factor[f['spw']] if flux is not None else None
             lp, ls = luminosities(abs(ap) if ap is not None else None, rest, z, dl)
+            if line.get('status', item['status']) not in STATUSES:
+                problems.append(f"{fid} {line['species']}: status must be one of {STATUSES}")
             rows.append(dict(role='main' if i == 0 and item.get('main') else 'blended', species=line['species'], qns=line.get('qns', ''),
+                             status=line.get('status', item['status']),
                              rest_GHz=rest, expected_GHz=expected, velocity_kms=float(v) if len(lines) == 1 else None,
                              flux_Jybkms=flux, flux_error_Jybkms=err, share=share, fit_verdict=verdict,
                              aperture_flux_Jykms=ap, Lprime_K_kms_pc2=lp, L_Lsun=ls))
@@ -95,9 +99,9 @@ def run(run, solution):
         w.writerow(['feature', 'status', 'role', 'species', 'qns', 'rest_GHz', 'observed_GHz', 'velocity_kms', 'width_kms',
                     'flux_Jybeam_kms', 'flux_error', 'share', 'aperture_flux_Jy_kms', 'Lprime_K_kms_pc2', 'L_Lsun', 'S/N', 'reliability'])
         for e in out:
-            for r in e['lines'] or [dict(role='', species='unidentified', qns='', rest_GHz=None, velocity_kms=None, flux_Jybkms=None, flux_error_Jybkms=None,
+            for r in e['lines'] or [dict(status=e['status'], role='', species='unidentified', qns='', rest_GHz=None, velocity_kms=None, flux_Jybkms=None, flux_error_Jybkms=None,
                                         share=None, aperture_flux_Jykms=None, Lprime_K_kms_pc2=None, L_Lsun=None)]:
-                w.writerow([e['feature'], e['status'], r['role'], r['species'], r['qns'], r['rest_GHz'], e['observed_GHz'], r['velocity_kms'],
+                w.writerow([e['feature'], r['status'], r['role'], r['species'], r['qns'], r['rest_GHz'], e['observed_GHz'], r['velocity_kms'],
                             e['width_kms'], r['flux_Jybkms'], r['flux_error_Jybkms'], r['share'], r['aperture_flux_Jykms'],
                             r['Lprime_K_kms_pc2'], r['L_Lsun'], e['snr'], e['reliability']])
     run.log('solve', f'{len(out)} features in the solution', problems=problems)
@@ -113,6 +117,7 @@ def summary(result):
             flux = 'n/a' if r['flux_Jybkms'] is None else f"{r['flux_Jybkms']:.3g}"
             error = '' if r['flux_error_Jybkms'] is None else f" ± {r['flux_error_Jybkms']:.2g}"
             lum = f", L' {r['Lprime_K_kms_pc2']:.3g} K km/s pc2" if r['Lprime_K_kms_pc2'] else ''
-            lines.append(f"    {r['role']:<8} {r['species']:<28} {r['qns']:<16} flux {flux}{error} Jy/b km/s{lum}")
+            tag = f" [{r['status']}]" if r['status'] != e['status'] else ''
+            lines.append(f"    {r['role']:<8} {r['species']+tag:<28} {r['qns']:<16} flux {flux}{error} Jy/b km/s{lum}")
     lines += ['  ! '+p for p in result['problems']]
     return '\n'.join(lines)

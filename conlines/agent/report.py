@@ -36,10 +36,23 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}img{max-width:100%;bor
 
 
 # ---------------------------------------------------------------- minimal Markdown
+def _indent_lists(text):
+    """Python-Markdown nests lists only at 4-space steps; notes are usually written with 2."""
+    out, prev_blank, in_code = [], True, False
+    for line in text.splitlines():
+        if line.lstrip().startswith('```'):
+            in_code = not in_code
+        n = len(line)-len(line.lstrip(' '))
+        if not in_code and n and not prev_blank:
+            line = ' '*(2*n)+line.lstrip(' ')
+        out.append(line); prev_blank = not line.strip()
+    return '\n'.join(out)
+
+
 def markdown(text):
     try:
         import markdown as md
-        return md.markdown(text, extensions=['tables', 'fenced_code'])
+        return md.markdown(_indent_lists(text), extensions=['tables', 'fenced_code', 'sane_lists'])
     except ImportError:
         pass
     out, para, in_list, in_code = [], [], None, False
@@ -54,7 +67,21 @@ def markdown(text):
         nonlocal para
         if para:
             out.append('<p>'+inline(' '.join(para))+'</p>'); para = []
+    table = []
+    def flush_table():
+        nonlocal table
+        if table:
+            rows = [[c.strip() for c in r.strip().strip('|').split('|')] for r in table if not re.match(r'^\s*\|?[\s:|-]+\|?\s*$', r)]
+            head, body = rows[0], rows[1:]
+            out.append('<table><thead><tr>'+''.join(f'<th>{inline(c)}</th>' for c in head)+'</tr></thead><tbody>'
+                       + ''.join('<tr>'+''.join(f'<td>{inline(c)}</td>' for c in r)+'</tr>' for r in body)+'</tbody></table>')
+            table = []
     for line in text.splitlines():
+        if line.lstrip().startswith('|') and not in_code:
+            flush(); table.append(line); continue
+        flush_table()
+        if in_list and line.startswith('  ') and line.strip() and not re.match(r'^\s*(?:[-*]|\d+\.)\s+', line):
+            out[-1] = out[-1][:-5]+' '+inline(line.strip())+'</li>'; continue
         if line.startswith('```'):
             flush(); out.append('</pre>' if in_code else '<pre>'); in_code = not in_code; continue
         if in_code:
@@ -76,7 +103,7 @@ def markdown(text):
             if in_list:
                 out.append('</ul>'); in_list = False
             para.append(line.strip())
-    flush()
+    flush(); flush_table()
     if in_list:
         out.append('</ul>')
     return '\n'.join(out)
@@ -126,7 +153,7 @@ def section_summary(run, out):
     rows = []
     for ent in sol['lines']:
         for r in ent['lines'] or [dict(role='', species='unidentified', qns='', rest_GHz=None, flux_Jybkms=None, flux_error_Jybkms=None)]:
-            rows.append(dict(ent, **{'line': r}))
+            rows.append(dict(ent, **{'line': r, 'status': r.get('status', ent['status'])}))
     out.append(notes(run, 'summary'))
     if rows:
         out.append('<h3>Adopted line solution</h3>'+table(rows, [
@@ -258,7 +285,7 @@ def section_solution(run, out, plots):
         out.append(f"<h3>{e(ent['feature'])} {tag(ent['status'])}</h3>")
         if ent['lines']:
             out.append(table(ent['lines'], [
-                ('Role', lambda r: e(r['role']), False), ('Line', lambda r: e(r['species']), False), ('Transition', lambda r: e(r['qns']), False),
+                ('Role', lambda r: e(r['role']), False), ('Status', lambda r: tag(r.get('status', ent['status'])), False), ('Line', lambda r: e(r['species']), False), ('Transition', lambda r: e(r['qns']), False),
                 ('Rest (GHz)', lambda r: num(r['rest_GHz'], '{:.5f}'), True), ('Velocity (km/s)', lambda r: num(r['velocity_kms'], '{:+.0f}'), True),
                 ('Flux (Jy/b km/s)', lambda r: num(r['flux_Jybkms'])+(' ± '+num(r['flux_error_Jybkms'], '{:.2g}') if r['flux_error_Jybkms'] is not None else ''), True),
                 ('Share', lambda r: num(r['share'], '{:.2f}'), True), ('Aperture flux (Jy km/s)', lambda r: num(r['aperture_flux_Jykms']), True),

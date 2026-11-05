@@ -11,6 +11,9 @@ and any ties:
                {"feature": "spw25-F003", "species": "HCO+, v = 0", "rest_GHz": 267.5576}]}
 
 ("tie": index of the line, 0-based, whose strength this one follows, times "ratio").
+Optional keys: "margin_channels" (line-free channels added on each side of every feature so
+that the baseline is constrained; default: a third of the feature's width, at least 10),
+"baseline" (true/false), "vmax" (km/s search range of the shape), "template" (shape="template").
 Robustness: every hypothesis is refitted to the observed spectrum plus many independent noise
 realisations taken from the spatial control apertures (real noise, with its channel
 correlations). The fraction of realisations in which each hypothesis has the lowest BIC, and
@@ -49,14 +52,15 @@ def _catalogue_row(run, line):
     return row
 
 
-def build(run, hyp, z=None, spec=None, margin=10):
+def build(run, hyp, z=None, spec=None, margin=None):
     feats = {f['id']: f for f in run.load('features')['features']}
     z = run.state['z'] if z is None else z
     spec = spec or spectra(run)
     regions = []
     for fid in hyp['features']:
         f = feats[fid]; sp = spec[f['spw']]; n = len(sp['frequency'])
-        m = int(hyp.get('margin_channels', margin))
+        m = hyp.get('margin_channels', margin)
+        m = int(m) if m is not None else max(10, (f['hi']-f['lo']+1)//3)
         lo, hi = max(0, f['lo']-m), min(n-1, f['hi']+m)
         regions.append(dict(id=fid, spw=f['spw'], lo=lo, hi=hi, freq=np.asarray(sp['frequency'][lo:hi+1], float),
                             spectrum=np.asarray(sp['spectrum'][lo:hi+1], float), noise=np.asarray(sp['noise'][lo:hi+1], float)))

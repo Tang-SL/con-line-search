@@ -26,11 +26,14 @@ def describe(record):
     centre = cube.data[:, sy, sx]
     noise = np.array([robust_sigma(plane) for plane in centre])          # per channel, central half of the field
     finite = float(np.isfinite(cube.data[nchan//2]).mean())
-    # Continuum: the 25th percentile over channels stays at the baseline as long as lines cover
-    # less than ~70% of the band (a median would not, for broad lines). Its significance is
-    # measured against how that map scatters across the (mostly empty) field.
+    # Continuum: a real continuum raises every channel, including both band edges, while line
+    # wings rarely reach both edges at once. The estimate is the lower of the two band-edge means
+    # (first and last ~8% of channels). Percentiles over channels are not used: wherever lines
+    # fill part of the band they shift every quantile upwards and mimic continuum. Significance
+    # is measured against how that map scatters across the (mostly empty) field.
     median_map = np.full(cube.data.shape[1:], np.nan)
-    low_map = np.nanpercentile(centre, 25, axis=0)
+    ne = max(5, nchan//12)
+    low_map = np.minimum(np.nanmean(centre[:ne], axis=0), np.nanmean(centre[-ne:], axis=0))
     median_map[sy, sx] = low_map
     spread = robust_sigma(low_map)
     level = float(np.nanmedian(low_map))

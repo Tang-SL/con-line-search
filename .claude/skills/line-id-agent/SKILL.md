@@ -51,7 +51,7 @@ folder. If the target name is unclear, ask.
 
 **1. Data.**
 - `scripts/agent data --run R --local DIR`, or
-  `scripts/agent data --run R --alma 2017.1.00759.S --target "NAME" --list`. Then `--download
+  `scripts/agent data --run R --alma <project code> --target "NAME" --list`. Then `--download
   --dest DIR` after checking the sizes.
 - ALMA products: use the `*.cube.I.pbcor.fits` cubes. If a project has no cube products,
   tell the user that imaging from the calibrated data is needed.
@@ -133,6 +133,10 @@ folder. If the target name is unclear, ask.
 - Use ties for known ratios (HCN-vib l=1e = l=1f).
 - Try more than one shape (gauss, gauss2, template).
 - Judge:
+  - the baseline: open the blend plot. Is the fitted baseline consistent with the line-free
+    channels beside the feature? If not, refit with a wider window (`"margin_channels"` in
+    the hypothesis), and report the flux change as a systematic. A baseline fitted only inside
+    a broad blend trades flux with the broad components.
   - reduced χ²: if ≳ 2 the fit is limited by the model, and noise robustness overstates
     certainty;
   - shapes that hit the edge of their allowed range;
