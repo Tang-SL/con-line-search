@@ -109,9 +109,52 @@ folder. If the target name is unclear, ask.
   vibrationally excited lines are kept, log A ≥ −6.5.
 - If Splatalogue is down, the step falls back to the local CDMS/JPL copy (`--source local`).
 
-**8. Identify.** `scripts/agent identify --run R`.
+**8. Strategy: which species, and why** (before identifying anything).
+Do not match every feature against the whole catalogue. A line-rich catalogue gives dozens of
+"candidates" per feature, most of them meaningless. Decide first which species are worth
+testing, and explain why to the reviewers.
+- Turn the expectation list from `notes/context.md` into `--expect` items, with explicit excited
+  states where the source calls for them (e.g. `HCN v2=1`, `HC3N v7=1` in a CON):
+  `scripts/agent plan --run R --expect "HCN; HCO+; HCN v2=1; ..."` (or `--expect @list.txt`).
+  Each item must have a reason: detected in this source, detected in similar sources (cite),
+  or bright in all galaxies.
+- The screen sorts every catalogue species into three groups:
+  - **test**: expected, or bright in galaxies (BRIGHT). Tried for every feature.
+  - **reserve**: common in galaxies, isotopologues and excited states of tested species, and
+    species seen in other galaxies. Tried only for a significant feature that no tested species
+    explains.
+  - **excluded**: everything else. Never tried automatically.
+- **Chance coincidence (P_c).** This is the fraction of the band within reach of one of a
+  species' strong lines, i.e. the chance that a feature at a random frequency "matches" it.
+  - A *line forest* (P_c > 0.3 with many strong lines, typically large organics with hundreds of
+    transitions, e.g. (CH3)2CO) can never be identified from one feature. It needs a full
+    multi-line model of the spectrum, which these data rarely support. Leave it out unless the
+    source is known to be that line-rich.
+  - A *low-specificity* species (few lines, but broad features) needs consistent companions or a
+    strong prior.
+- Read `plan.json` / the summary:
+  - Check the expected items that have no transition in the observed windows (the summary lists
+    them).
+  - Check that nothing important landed in reserve or excluded; if it did, add it to `--expect`
+    with a reason, and rerun.
+  - Look at `plots/strategy_*.png`: the strong lines of the tested species over each spectrum.
+- Write `notes/strategy.md`: one or two short paragraphs for the reviewers. Say:
+  - which species you test and why (source type, literature, what is expected in this
+    frequency range);
+  - which you deliberately leave out and why (line forests, species never seen in galaxies);
+  - when you widen the search (the reserve, only for significant features left unexplained);
+  - which tests decide an identification: position and velocity, companion lines (LTE),
+    excitation, abundance prior, and blend fits for broad or blended features.
+
+  Keep the tested list short. Usually fewer than about 15 species are needed. A long list means
+  the expectation list is not doing its job.
+
+**9. Identify.** `scripts/agent identify --run R` (uses the screen; `--species all` only as a last resort, and say so).
 - For each significant feature, read the candidate table and the plots:
-  `plots/feature_*.png` and `plots/companions_*.png`.
+  `plots/feature_*.png` and `plots/companions_*.png`. Candidates marked `[reserve]` came from
+  the widened search; `[line forest]` / `[low specificity]` ones need more than a frequency
+  match. The weblog also lists how many excluded species have a line inside each feature; this
+  shows how little a bare frequency match means.
 - Ask question 2 for the leading candidates:
   - **Position**: is the predicted frequency inside the feature? Is the velocity offset
     reasonable? (For broad or self-absorbed lines the centroid is not meaningful.)
@@ -125,7 +168,7 @@ folder. If the target name is unclear, ask.
 - Write `notes/identification_<FEATURE>.md` for each significant feature, and an overview in
   `notes/identification.md`.
 
-**9. Blends and alternatives.**
+**10. Blends and alternatives.**
 - Write each plausible solution as a hypothesis JSON (format in
   `conlines/agent/blend_step.py`).
 - Fit them: `scripts/agent blend --run R --hypothesis H.json`.
@@ -145,7 +188,7 @@ folder. If the target name is unclear, ask.
 - Rank the solutions as in playbook §5.
 - Write `notes/blends.md`.
 
-**10. Solution.** Write `solution.json` and run `scripts/agent solve --run R --solution
+**11. Solution.** Write `solution.json` and run `scripts/agent solve --run R --solution
 solution.json` (format in `conlines/agent/solution_step.py`). Status rules:
 - **secure**: significant and reliable, and the identification is unique. Either ≥2
   transitions of the species are consistent, with no missing companions. Or it is a single
@@ -161,13 +204,13 @@ solution.json` (format in `conlines/agent/solution_step.py`). Status rules:
 For every entry, give the `evidence` (one paragraph: significance, companions, literature)
 and the `alternatives`, each with why it was not adopted. Write `notes/solution.md`.
 
-**11. Maps.** `scripts/agent maps --run R`.
+**12. Maps.** `scripts/agent maps --run R`.
 - Look at the maps: is the emission compact or extended, and where is it? Do blended lines
   separate sensibly?
 - Watch for warnings about velocity fields beyond the search window.
 - Write `notes/maps.md`.
 
-**12. Report.**
+**13. Report.**
 - Write `notes/summary.md`: 5–10 sentences covering what lines are present, how sure you are,
   what this says about the source, and the main caveats and next steps.
 - Write `notes/provenance.md` if you changed or overrode anything.
@@ -206,7 +249,7 @@ band as its own run and report them together in **one** weblog.
 - `context.md`: source context, literature and one expectation list per band.
 - `provenance.md`: toolkit changes, analyst choices and products for all runs.
 
-Each run keeps only band-specific notes (`data.md`, `detection.md`, `significance.md`,
+Each run keeps only band-specific notes (`data.md`, `detection.md`, `significance.md`, `strategy.md`,
 `identification*.md`, `blends.md`, `solution.md`, `maps.md`). Do not repeat the summary or
 context inside a band.
 
@@ -221,7 +264,7 @@ The page then follows this order:
 2. **Data**: the merged note, then one subsection per band.
 3. **Source context & literature**: once.
 4. **One sub-index per band**, holding only its line identification: Line search,
-   Significance, Identification, Blends & robustness (only if fitted), Line solution, Maps.
+   Significance, Identification strategy, Identification, Blends & robustness (only if fitted), Line solution, Maps.
 5. **Provenance** (merged), with each run's step log.
 
 Open the page and check that every plot and link works. Give the user the combined weblog path;
@@ -229,7 +272,7 @@ the per-band weblogs (`scripts/agent report`) remain available for a single band
 
 ## Notes (what the weblog shows)
 
-`notes/summary.md`, `data.md`, `context.md`, `detection.md`, `significance.md`,
+`notes/summary.md`, `data.md`, `context.md`, `detection.md`, `significance.md`, `strategy.md`,
 `identification.md`, `identification_<FEATURE>.md`, `blends.md`, `solution.md`, `maps.md`,
 `provenance.md`. Markdown. Write for a colleague: state what you checked, what you concluded,
 and what would change your mind. Cite papers as (Author Year, arXiv:ID).

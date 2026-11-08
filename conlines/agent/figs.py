@@ -16,13 +16,37 @@ def _save(fig, path):
     return path
 
 
+FULL_VIEW_PIXELS = 64     # images this small (cutouts) are always shown whole
+
+
+def _window(centre, zoom, nx, ny, box=None):
+    """Zoom window around centre, kept inside the data: (cx, cy, half_x, half_y) in pixels.
+
+    box = (x0, x1, y0, y1), the pixel range that holds finite data (default: the whole image).
+    Small data areas (cutouts, <= FULL_VIEW_PIXELS on both axes) are shown whole. Larger ones get
+    a square window that is never larger than the data and is shifted, not cut, at the edges, so a
+    panel never shows blank space beyond the data."""
+    x0, x1, y0, y1 = box if box else (0, nx-1, 0, ny-1)
+    w, h = x1-x0+1, y1-y0+1
+    if max(w, h) <= FULL_VIEW_PIXELS or not zoom or centre is None:
+        return (x0+x1)/2, (y0+y1)/2, w/2, h/2
+    half = min(max(12., min(nx, ny)/(2*zoom)), w/2, h/2)
+    cx = float(np.clip(centre[0], x0+half-.5, x1+.5-half))
+    cy = float(np.clip(centre[1], y0+half-.5, y1+.5-half))
+    return cx, cy, half, half
+
+
+def _finite_box(data):
+    rows, cols = np.flatnonzero(np.isfinite(data).any(axis=1)), np.flatnonzero(np.isfinite(data).any(axis=0))
+    return (cols[0], cols[-1], rows[0], rows[-1]) if rows.size else None
+
+
 def _image(ax, image, title, centre=None, zoom=None, cmap='viridis', symmetric=False, label=None, marks=()):
     data = np.asarray(image, float)
     ny, nx = data.shape
-    view = data
-    if centre is not None and zoom:
-        cx, cy = centre; half = max(8, min(nx, ny)/(2*zoom))
-        view = data[max(0, int(cy-half)):int(cy+half)+1, max(0, int(cx-half)):int(cx+half)+1]
+    box = _finite_box(data)
+    cx, cy, hx, hy = _window(centre, zoom, nx, ny, box)
+    view = data[max(0, int(np.floor(cy-hy+.5))):int(np.ceil(cy+hy+.5)), max(0, int(np.floor(cx-hx+.5))):int(np.ceil(cx+hx+.5))]
     finite = view[np.isfinite(view)]
     if finite.size:
         if symmetric:            # colour scale from what is shown, so a compact source is not saturated
@@ -33,8 +57,7 @@ def _image(ax, image, title, centre=None, zoom=None, cmap='viridis', symmetric=F
     else:
         vmin, vmax = 0, 1
     h = ax.imshow(data, origin='lower', cmap=cmap, vmin=vmin, vmax=vmax, interpolation='nearest')
-    if centre is not None and zoom:
-        ax.set_xlim(cx-half, cx+half); ax.set_ylim(cy-half, cy+half)
+    ax.set_xlim(cx-hx, cx+hx); ax.set_ylim(cy-hy, cy+hy)
     for x, y, style in marks:
         ax.plot(x, y, style, ms=9, mfc='none', mew=1.6)
     ax.set_title(title, fontsize=9); ax.set_xlabel('x (pixel)'); ax.set_ylabel('y (pixel)')
@@ -45,9 +68,11 @@ def _image(ax, image, title, centre=None, zoom=None, cmap='viridis', symmetric=F
 
 
 def inspection(path, cube, info, median_map, peak_snr, z=None):
-    fig, ax = plt.subplots(1, 3, figsize=(15, 4.2), gridspec_kw=dict(width_ratios=[1, 1, 1.6]))
+    fig, ax = plt.subplots(1, 3, figsize=(15, 4.4), gridspec_kw=dict(width_ratios=[1, 1, 1.6]), layout='constrained')
     lx, ly = info['line_peak_pixel']; cx, cy = info['continuum_pixel']
-    _image(ax[0], median_map, 'Continuum estimate (lower of the two band-edge means)', (cx, cy), 3, label=info['unit'], marks=[(cx, cy, 'w+')])
+    real = (info.get('continuum_snr') or 0) >= 5          # otherwise the 'peak' is noise: centre on the line source
+    _image(ax[0], median_map, 'Continuum estimate (lower of the two band-edge means)' + ('' if real else f"\nno significant continuum (peak S/N {info.get('continuum_snr') or 0:.0f})"),
+           (cx, cy) if real else (lx, ly), 3, label=info['unit'], marks=[(cx, cy, 'w+')] if real else [(lx, ly, 'c+')])
     _image(ax[1], peak_snr, 'Peak |S/N| over channels (line emission)', (lx, ly), 3, cmap='magma', marks=[(lx, ly, 'c+')])
     f = cube.frequency
     for (x, y), colour, name in [((lx, ly), TEAL, f'brightest line pixel {lx},{ly}'), ((cx, cy), GREY, f'continuum peak {cx},{cy}')]:
@@ -75,7 +100,7 @@ def coverage(path, rows, z=None):
 
 
 def components(path, image, components_, key, centre=None):
-    fig, ax = plt.subplots(figsize=(6.2, 5.4))
+    fig, ax = plt.subplots(figsize=(6.2, 5.4), layout='constrained')
     _image(ax, image, f'{key}: ESPADA components (red = emission, blue = absorption)', centre, 2 if centre else None)
     for c in components_:
         colour = RED if c['sign'] == 'Emission' else BLUE
@@ -110,21 +135,61 @@ def spectrum(path, freq, spec, noise, features=(), title='', unit='Jy/beam', z=N
     return _save(fig, path)
 
 
-def companions(path, rows, title):
-    """Predicted vs measured integrated intensity for every transition of one candidate species."""
-    fig, ax = plt.subplots(figsize=(7.5, 3.8))
-    x = np.arange(len(rows))
-    pred = np.array([r['predicted'] for r in rows]); meas = np.array([r['measured'] for r in rows]); err = np.array([r['error'] for r in rows])
+def companions(path, rows, title, max_rows=15):
+    """Predicted vs measured integrated intensity for the transitions of one candidate species.
+
+    Only transitions that test the candidate are drawn: predicted above 3σ, or missing, strongest
+    first (at most max_rows). If none is testable, the few strongest predictions are shown to make
+    that visible. The title says how many transitions were left out."""
+    keyed = sorted(rows, key=lambda r: -(r['predicted'] or 0))
+    show = [r for r in keyed if r['predicted'] > 3*r['error'] or r.get('status') == 'missing'][:max_rows]
+    note = 'testable transitions'
+    if not show:
+        show, note = keyed[:6], 'none testable: strongest predictions'
+    left = len(rows)-len(show)
+    fig, ax = plt.subplots(figsize=(max(5.5, 1.2+.45*len(show)), 4.2), layout='constrained')
+    x = np.arange(len(show))
+    pred = np.array([r['predicted'] for r in show]); meas = np.array([r['measured'] for r in show]); err = np.array([r['error'] for r in show])
     ax.bar(x-.2, pred, .4, color=PURPLE, alpha=.7, label='LTE prediction (scaled to the feature)')
     ax.errorbar(x+.2, meas, yerr=3*err, fmt='o', color=TEAL, label='measured ±3σ')
-    for i, r in enumerate(rows):
+    for i, r in enumerate(show):
         if r.get('status') == 'missing':
             ax.text(i, max(pred[i], meas[i]), ' missing', color=RED, fontsize=7, rotation=90, va='bottom')
         elif str(r.get('status', '')).startswith('blended'):
             ax.text(i, max(pred[i], meas[i]), ' blended', color=GREY, fontsize=7, rotation=90, va='bottom')
-    ax.set_xticks(x); ax.set_xticklabels([r['label'] for r in rows], rotation=60, ha='right', fontsize=6)
+    ax.set_xticks(x); ax.set_xticklabels([f"{r['window']}: {r['label']}"[:34] for r in show], rotation=50, ha='right', fontsize=7)
     ax.set_ylabel('Integrated intensity (Jy/beam km/s)'); ax.axhline(0, color='#94a3b8', lw=.5)
-    ax.set_title(title); ax.legend(fontsize=7)
+    ax.set_title(title+f"\n{note}" + (f'; {left} weaker transitions (below 3σ) not shown' if left > 0 else ''), fontsize=9)
+    ax.legend(fontsize=7)
+    return _save(fig, path)
+
+
+def strategy(path, freq, spec, noise, features, lines, title, z=None):
+    """Aperture spectrum with the strong lines of the species to be tested.
+
+    lines: list of (observed GHz, species, transition label, colour). One legend entry per
+    species; transition labels sit at the top of the panel."""
+    fig, ax = plt.subplots(figsize=(12, 4.2), layout='constrained')
+    ax.fill_between(freq, -3*noise, 3*noise, color='#e2e8f0', alpha=.8, step='mid', label='±3σ')
+    for q in features:
+        a, b = sorted([freq[q['lo']], freq[q['hi']]])
+        ax.axvspan(a, b, color='#16a34a' if q.get('significant') and q.get('reliable', True) else '#d97706', alpha=.08, lw=0)
+    ax.step(freq, spec, where='mid', color='#0f172a', lw=.8, label='aperture spectrum')
+    ax.axhline(0, color='#94a3b8', lw=.5)
+    lo, hi = np.nanmin(spec), np.nanmax(spec)
+    ax.set_ylim(min(lo, -3*np.nanmedian(noise))*1.1, hi+.35*(hi-lo))
+    seen = set()
+    for f, species, label, colour in sorted(lines):
+        ax.axvline(f, color=colour, lw=1.1, ls='--', label=None if species in seen else species)
+        seen.add(species)
+        ax.text(f, ax.get_ylim()[1], label, rotation=90, fontsize=6, color=colour, ha='center', va='top',
+                bbox=dict(facecolor='white', edgecolor='none', alpha=.75, pad=.5))
+    ax.set_xlim(freq.min(), freq.max())
+    ax.set_xlabel('Observed frequency (GHz)'); ax.set_ylabel('Jy/beam'); ax.set_title(title, fontsize=9)
+    if z is not None:
+        sec = ax.secondary_xaxis('top', functions=(lambda x: x*(1+z), lambda x: x/(1+z)))
+        sec.set_xlabel(f'Rest frequency (GHz), z = {z:.5f}', fontsize=8)
+    ax.legend(fontsize=7, loc='center left', bbox_to_anchor=(1.01, .5), frameon=False)
     return _save(fig, path)
 
 

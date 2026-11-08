@@ -141,7 +141,7 @@ def run(run, z, filters=('extragalactic', 'ism-hot-core'), margin_kms=600., emax
             x.setdefault('seen_extragalactic', None)
         kept, reasons = screen(rows, emax, min_log_a, recommended_only=(used == 'Splatalogue'))
         for k in kept:
-            k['S_mu2'] = strength(k)
+            k['S_mu2'] = k.get('S_mu2') or strength(k)      # keep a line strength the line list already gives
         out[r['key']] = dict(source=used, rest_range_GHz=[low, high], n_raw=len(rows), n_kept=len(kept), removed=reasons, rows=kept)
     result = dict(z=z, filters=list(filters), emax_K=emax, min_log_a=min_log_a, notes=notes, windows=out)
     run.save('catalogue', result)

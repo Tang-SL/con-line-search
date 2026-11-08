@@ -9,6 +9,7 @@ Steps, in the usual order:
   extract    aperture spectra, significance and reliability of every feature
   zfrom      redshift implied by a feature and a rest frequency (--feature F --rest GHZ)
   catalog    candidate transitions at a redshift (--z Z)
+  plan       species screen: which species to test and why (write notes/strategy.md after it)
   identify   candidates per feature with companion-line (LTE) tests
   blend      fit a blend hypothesis (--hypothesis FILE_OR_JSON)
   robust     compare hypotheses under noise realisations (--hypotheses FILE_OR_JSON --n 100)
@@ -54,8 +55,14 @@ def main(argv=None):
     s = cmd('catalog'); s.add_argument('--z', type=float, required=True); s.add_argument('--filters', nargs='+', default=['extragalactic', 'ism-hot-core'])
     s.add_argument('--emax', type=float, default=1500.); s.add_argument('--min-log-a', type=float, default=-6.5); s.add_argument('--margin', type=float, default=600.)
     s.add_argument('--source', default='auto', help="auto (Splatalogue, else local CDMS/JPL), splatalogue, local, or file:PATH (JSON list of transitions)")
+    s = cmd('plan'); s.add_argument('--expect', action='append', default=[], metavar='SPECIES',
+                                    help="expected species, e.g. 'HCN' or 'HCN v2=1' (repeat, or separate with ';'); or @FILE with one per line")
+    s.add_argument('--t-ref', type=float, default=150., help='excitation temperature (K) for line strengths in the screen')
+    s.add_argument('--pmax', type=float, default=.3, help='chance-coincidence probability above which a species is a line forest')
+    s.add_argument('--margin', type=float, default=100.)
     s = cmd('identify'); s.add_argument('--margin', type=float, default=100.); s.add_argument('--include', default='reliable', choices=['reliable', 'significant', 'all'])
     s.add_argument('--top', type=int, default=6)
+    s.add_argument('--species', default='plan', choices=['plan', 'all'], help="plan: species from the `plan` screen (default); all: every catalogue species")
     s = cmd('blend'); s.add_argument('--hypothesis', required=True)
     s = cmd('robust'); s.add_argument('--hypotheses', required=True); s.add_argument('--n', type=int, default=100); s.add_argument('--name', default='robustness')
     s = cmd('solve'); s.add_argument('--solution', required=True)
@@ -176,9 +183,22 @@ def main(argv=None):
     elif a.step == 'catalog':
         from . import catalog_step
         print(catalog_step.summary(catalog_step.run(run, a.z, a.filters, a.margin, a.emax, a.min_log_a, a.source)))
+    elif a.step == 'plan':
+        from . import plan_step
+        expect = []
+        for item in a.expect:
+            if item.startswith('@'):
+                expect += [x.split('#')[0].strip() for x in Path(item[1:]).expanduser().read_text().splitlines()]
+            else:
+                expect += [x.strip() for x in item.split(';')]
+        print(plan_step.summary(plan_step.run(run, [x for x in expect if x], a.t_ref, a.pmax, a.margin)))
+        if not (run.path/'notes'/'strategy.md').exists():
+            print('\nNext: write notes/strategy.md (the identification strategy for reviewers) before running `identify`.')
     elif a.step == 'identify':
         from . import identify_step
-        print(identify_step.summary(identify_step.run(run, a.margin, a.include), a.top))
+        if a.species == 'plan' and not (run.path/'notes'/'strategy.md').exists():
+            print('  ! notes/strategy.md is missing: explain the identification strategy before identifying (see the skill, step 8).')
+        print(identify_step.summary(identify_step.run(run, a.margin, a.include, top=3, species=a.species), a.top))
     elif a.step == 'blend':
         from . import blend_step
         for h in blend_step.load_hypotheses(a.hypothesis):

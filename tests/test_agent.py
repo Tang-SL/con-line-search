@@ -94,7 +94,11 @@ def test_agent_pipeline_end_to_end(tmp_path, monkeypatch, capsys):
         dict(species='HCN, v2 = 1', rest_GHz=VIB_E, qns='0301-02-1', Eu_K=1050., log10_A_s=-3.15, S_mu2=72.4, seen_in_space=True),
         dict(species='HCN, v2 = 1', rest_GHz=VIB_F, qns='03-1-0201', Eu_K=1050., log10_A_s=-3.14, S_mu2=72.4, seen_in_space=True),
         dict(species='HCO+, v = 0', rest_GHz=HCOP, qns='03-02', Eu_K=25.7, log10_A_s=-2.84, S_mu2=45.6, seen_in_space=True),
-        dict(species='SO2, v = 0', rest_GHz=267.537, qns='x', Eu_K=200., log10_A_s=-4., S_mu2=10., seen_in_space=True)]))
+        dict(species='SO2, v = 0', rest_GHz=267.537, qns='x', Eu_K=200., log10_A_s=-4., S_mu2=10., seen_in_space=True),
+        # an exotic species exactly on HCN, and a 300-line forest across both windows: the strategy must leave both out
+        dict(species='HCCCC13CN', rest_GHz=HCN+.002, qns='99-98', Eu_K=300., log10_A_s=-3., S_mu2=900., seen_in_space=False)]
+        + [dict(species='(CH3)2CO v=0', rest_GHz=float(f), qns=f'{i}', Eu_K=50., log10_A_s=-4., S_mu2=100., seen_in_space=True)
+           for i, f in enumerate(np.linspace(264.9, 268.5, 300))]))
     r = str(tmp_path/'run')
     main(['data', '--run', r, '--local', str(data), '--target', 'SYNTH-CON'])
     main(['inspect', '--run', r, '--z', str(Z)])
@@ -106,10 +110,21 @@ def test_agent_pipeline_end_to_end(tmp_path, monkeypatch, capsys):
     good = [f for f in feats if f['significant'] and f['reliable']]
     assert {f['spw'] for f in good} == {'spw25', 'spw27'}
     main(['catalog', '--run', r, '--z', str(Z), '--source', f'file:{catalogue}'])
+    main(['plan', '--run', r, '--expect', 'HCN; HCO+', '--expect', 'HCN v2=1; NOSUCH'])
+    plan = run.load('plan')
+    decision = {x['species']: x for x in plan['species']}
+    assert decision['(CH3)2CO v=0']['decision'] == 'excluded' and decision['(CH3)2CO v=0']['line_forest']
+    assert decision['HCCCC13CN']['decision'] == 'excluded'
+    assert {k for k, x in decision.items() if x['decision'] == 'test'} == {'HCN, v = 0', 'HCN, v2 = 1', 'HCO+, v = 0'}
+    assert decision['SO2, v = 0']['decision'] == 'reserve' and plan['unmatched_expect'] == ['NOSUCH']
+    (run.path/'notes'/'strategy.md').write_text('We test HCN, HCO+ and HCN-vib because this is a CON.')
     main(['identify', '--run', r])
     cands = run.load('candidates')['features']
     top = {cands[f['id']]['candidates'][0]['species'] for f in good}
     assert top == {'HCN, v = 0', 'HCO+, v = 0'}
+    hcn_feature = cands[next(f['id'] for f in good if f['spw'] == 'spw27')]
+    assert {c['species'] for c in hcn_feature['candidates']} <= {'HCN, v = 0', 'HCN, v2 = 1', 'HCO+, v = 0'}
+    assert {'HCCCC13CN', '(CH3)2CO v=0'} <= set(hcn_feature['excluded_coincident'])
     hcn = next(f['id'] for f in good if f['spw'] == 'spw27'); hcop = next(f['id'] for f in good if f['spw'] == 'spw25')
     hyps = [dict(name='no vib', shape='gauss2', features=[hcn, hcop],
                  lines=[dict(feature=hcn, species='HCN, v = 0', rest_GHz=HCN), dict(feature=hcop, species='HCO+, v = 0', rest_GHz=HCOP)]),
@@ -145,6 +160,7 @@ def test_agent_pipeline_end_to_end(tmp_path, monkeypatch, capsys):
     main(['report', '--run', r, '--title', 'Synthetic CON'])
     html = (run.path/'weblog'/'index.html').read_text()
     assert __import__('re').search(r'<(b|strong)>Synthetic</(b|strong)>', html) and 'HCN, v2 = 1' in html and 'tentative' in html
+    assert 'Identification strategy' in html and 'because this is a CON' in html and 'line forest' in html
     for src in __import__('re').findall(r'src="(plots/[^"]+)"', html):
         assert (run.path/'weblog'/src).exists(), src
     main(['status', '--run', r])
@@ -211,3 +227,36 @@ def test_combined_weblog_merges_high_level_sections(tmp_path):
     assert 'id="summary"' in page and 'id="context"' in page and 'id="provenance"' in page
     assert 'id="ba-detection"' in page and 'id="bb-detection"' in page and 'id="ba-summary"' not in page
     assert 'Detection notes of b.' in page and (tmp_path/'web'/'bb'/'plots').is_dir()
+
+
+def test_species_screen_rules():
+    """Expected and bright species are tested; common, isotopologues and excited states of tested species are
+    reserve; line forests, deuterated species and forms of untested species are excluded."""
+    from conlines.agent.plan_step import screen_species, matches, parent_of
+    def row(species, f, eu=20., s=50.):
+        return dict(species=species, rest_GHz=f, qns='x', Eu_K=eu, S_mu2=s, seen_in_space=True)
+    rows = [row('HCN, v = 0', 100.2), row('HCN, v2 = 1', 100.4, 1000.), row('H13CN', 100.6), row('CS', 100.8), row('SO2, v = 0', 101.0),
+            row('DCN', 101.2), row('HC3N, (0,0,0,1)', 101.4, 300.), row('CH3CH2CN, v12 = 1-A', 101.6), row('Exotic', 101.7)]
+    rows += [row('BigOrganic', f) for f in np.linspace(100.05, 101.95, 120)]
+    cat = dict(windows=dict(w=dict(rows=rows)))
+    out, unmatched = screen_species(cat, dict(w=(100., 102.)), 0., 100., expect=['HCN', 'HC3N v7=1', 'NOPE'])
+    d = {r['species']: r['decision'] for r in out}
+    assert d['HCN, v = 0'] == 'test' and d['HC3N, (0,0,0,1)'] == 'test'          # expected (tuple notation = v7=1)
+    assert d['CS'] == 'test'                                                          # bright in galaxies
+    assert d['SO2, v = 0'] == 'reserve' and d['HCN, v2 = 1'] == 'reserve'             # common; excited state of a tested species
+    assert d['H13CN'] == 'reserve'                                                    # common isotopologue
+    assert d['DCN'] == 'excluded' and d['BigOrganic'] == 'excluded' and d['Exotic'] == 'excluded'
+    assert d['CH3CH2CN, v12 = 1-A'] == 'excluded'                                    # excited state of an untested species
+    assert next(r for r in out if r['species'] == 'BigOrganic')['line_forest']
+    assert unmatched == ['NOPE']
+    assert matches('HCN v2=1', 'HCN, v2 = 1') and not matches('HCN', 'HCN, v2 = 1') and matches('HC3N v7=1', 'HC3N, (0,0,0,1)')
+    assert parent_of('H13CN') == 'HCN' and parent_of('HC18O+') == 'HCO+' and parent_of('HDO') == 'H2O'
+
+
+def test_image_window_stays_inside_the_data():
+    from conlines.agent import figs
+    assert figs._window((34, 27), 3, 44, 40) == (21.5, 19.5, 22., 20.)               # small cutout: shown whole
+    cx, cy, hx, hy = figs._window((380, 5), 3, 384, 384)                           # near a corner of a large image
+    assert cx+hx <= 383.5 and cy-hy >= -.5 and hx == hy
+    cx, cy, hx, hy = figs._window((300, 250), 3, 384, 384, box=(96, 287, 96, 287))  # finite data only in the centre
+    assert 95.5 <= cx-hx and cx+hx <= 287.5 and 95.5 <= cy-hy and cy+hy <= 287.5

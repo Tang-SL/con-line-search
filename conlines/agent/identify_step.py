@@ -50,15 +50,36 @@ def prior_for(name, flags, seen_extragalactic, seen_in_space):
     return p
 
 
+# CDMS writes some vibrational states as quantum-number tuples, e.g. HC3N (v4,v5,v6,v7):
+# 'HC3N, (0,0,0,1)' is v7=1 and 'HC3N, (0,1,0,0)/(0,0,0,3)' is v5=1/v7=3.
+TUPLE_MODES = {'HC3N': (4, 5, 6, 7), 'H13CCCN': (4, 5, 6, 7), 'HC13CCN': (4, 5, 6, 7), 'HCC13CN': (4, 5, 6, 7), 'HC3N-15': (4, 5, 6, 7)}
+TUPLE = re.compile(r'\((\d+(?:,\d+)+)\)')
+
+
+def vib_aliases(name):
+    """Readable names of a tuple-notation state: 'HC3N, (0,0,0,1)' -> ['HC3N v7=1']."""
+    base = re.split(r',\s*\(', name, maxsplit=1)[0].strip()
+    modes = TUPLE_MODES.get(base)
+    out = []
+    for t in TUPLE.findall(name):
+        vals = [int(x) for x in t.split(',')]
+        if not modes or len(vals) != len(modes):
+            continue
+        parts = [f'v{m}={v}' for m, v in zip(modes, vals) if v]
+        out.append(base+' '+(' '.join(parts) if parts else 'v=0'))
+    return out
+
+
 def base_species(name):
-    """'HCN v2=1' -> 'HCN'; 'CH3OH vt=0-2' -> 'CH3OH' (for priors)."""
-    n = re.split(r'[,\s]+(?:v\d?|vt|v=|v\s*=)', name, maxsplit=1)[0]
+    """'HCN v2=1' -> 'HCN'; 'CH3OH vt=0-2' -> 'CH3OH'; 'HC3N, (0,0,0,1)' -> 'HC3N' (for priors)."""
+    n = re.split(r'[,\s]+(?:v\d?|vt|v=|v\s*=|\(\d)', name, maxsplit=1)[0]
     return n.strip().rstrip(',').strip()
 
 
 def kind_flags(name):
     flags = []
-    if re.search(r'v\d?\s*=\s*[1-9]|vt\s*=\s*[1-9]|v\d=1|\bv\s*=\s*1', name):
+    if any(int(x) for t in TUPLE.findall(name) for x in t.split(',')) or \
+            re.search(r'\bv\d*\s*=\s*[1-9]|vt\s*=\s*[1-9]', name):
         flags.append('vibrationally excited')
     if re.search(r'13C|15N|18O|17O|34S|33S|29Si|30Si|\bD\b|D(?![a-z])', name):
         flags.append('rare isotopologue')
@@ -89,14 +110,16 @@ def measure(freq, spec, noise, centre, width_kms, sign):
     return float(s*np.sum(spec[sel])*dv), float(np.sqrt(np.sum(noise[sel]**2))*dv)
 
 
-def candidates_for(feature, catalogue, spectra, z, margin_kms=100., sigma_kms=30., others=()):
+def candidates_for(feature, catalogue, spectra, z, margin_kms=100., sigma_kms=30., others=(), allowed=None):
+    """Candidate species for one feature; `allowed` (a set of species names) restricts the list."""
     rows = catalogue['windows'][feature['spw']]['rows']
     pad = feature['freq_GHz']*margin_kms/C
     inside = [dict(r, expected_GHz=r['rest_GHz']/(1+z)) for r in rows
               if feature['freq_lo_GHz']-pad <= r['rest_GHz']/(1+z) <= feature['freq_hi_GHz']+pad]
     by_species = {}
     for r in inside:
-        by_species.setdefault(r['species'], []).append(r)
+        if allowed is None or r['species'] in allowed:
+            by_species.setdefault(r['species'], []).append(r)
     out = []
     for species, trans in by_species.items():
         # all transitions of this species in every window, with their own spectra
@@ -160,12 +183,13 @@ def candidates_for(feature, catalogue, spectra, z, margin_kms=100., sigma_kms=30
             bestT, best = None, dict(fmax=None, companions=[], detected=0, missing=0, testable=0, supported=0)
         name = base_species(species)
         prior = prior_for(name, kind_flags(species), trans[0].get('seen_extragalactic'), trans[0].get('seen_in_space'))
-        position = 1. if any(feature['freq_lo_GHz'] <= r['expected_GHz'] <= feature['freq_hi_GHz'] for r in trans) else .3
+        inside = any(feature['freq_lo_GHz'] <= r['expected_GHz'] <= feature['freq_hi_GHz'] for r in trans)
+        position = 1. if inside else .3
         if feature['channels'] <= 15 and err is not None:
             position *= max(probabilities[0], .05)
         plaus = best['fmax'] if best['fmax'] is not None else .5
         support = .6+.1*min(best['supported'], 4)          # companions predicted, testable and seen
-        out.append(dict(species=species, base=name, flags=kind_flags(species), prior=prior,
+        out.append(dict(species=species, base=name, flags=kind_flags(species), prior=prior, position=position, inside=inside,
                         transitions=[dict(rest_GHz=r['rest_GHz'], qns=r.get('qns'), Eu_K=r.get('Eu_K'), log10_A_s=r.get('log10_A_s'),
                                           expected_GHz=r['expected_GHz'], catalogue=r.get('catalogue'),
                                           inside=bool(feature['freq_lo_GHz'] <= r['expected_GHz'] <= feature['freq_hi_GHz'])) for r in trans],
@@ -181,9 +205,24 @@ def candidates_for(feature, catalogue, spectra, z, margin_kms=100., sigma_kms=30
     return sorted(out, key=lambda c: -c['score'])
 
 
-def run(run, margin_kms=100., include='reliable', sigma_kms=30., top=3):
+def coincident(feature, catalogue, z, species, margin_kms=100.):
+    """Species from a list with a catalogue line inside the feature (± margin)."""
+    pad = feature['freq_GHz']*margin_kms/C
+    lo, hi = feature['freq_lo_GHz']-pad, feature['freq_hi_GHz']+pad
+    return sorted({r['species'] for r in catalogue['windows'][feature['spw']]['rows'] if r['species'] in species and lo <= r['rest_GHz']/(1+z) <= hi})
+
+
+def run(run, margin_kms=100., include='reliable', sigma_kms=30., top=3, species='plan'):
+    """species: 'plan' = the species screen of the plan step (tested species for every feature; reserve
+    species only for features that no tested species explains); 'all' = every catalogue species."""
     feats = run.load('features')['features']
     catalogue = run.load('catalogue'); z = catalogue['z']
+    plan = run.load('plan') if species == 'plan' and run.has('plan') else None
+    if species == 'plan' and plan is None:
+        print('  ! no species screen (run `plan` first): testing every catalogue species; candidate lists will be long')
+    groups = {d: {r['species'] for r in plan['species'] if r['decision'] == d} for d in ('test', 'reserve', 'excluded')} if plan else None
+    forests = {r['species'] for r in plan['species'] if r['line_forest']} if plan else set()
+    lowspec = {r['species'] for r in plan['species'] if r.get('low_specificity') and not r['line_forest']} if plan else set()
     spectra = {}
     for key in catalogue['windows']:
         p = run.path/'cache'/f'spectrum_{key}.npz'
@@ -194,21 +233,41 @@ def run(run, margin_kms=100., include='reliable', sigma_kms=30., top=3):
               or (include == 'significant' and f['significant'] and f['reliable'])]
     out = {}
     for f in chosen:
-        cands = candidates_for(f, catalogue, spectra, z, margin_kms, sigma_kms, feats)
-        out[f['id']] = dict(feature=f, candidates=cands)
+        stage = 'all species'
+        if groups is None:
+            cands = candidates_for(f, catalogue, spectra, z, margin_kms, sigma_kms, feats)
+        else:
+            cands = candidates_for(f, catalogue, spectra, z, margin_kms, sigma_kms, feats, allowed=groups['test'])
+            stage = 'tested species'
+            # widen to the reserve only for a significant feature that no tested species can explain
+            # (a line inside the feature that accounts for at least half of it)
+            if f.get('significant') and not any(c['inside'] and (c['fmax'] is None or c['fmax'] >= .5) for c in cands):
+                extra = candidates_for(f, catalogue, spectra, z, margin_kms, sigma_kms, feats, allowed=groups['reserve'])
+                for c in extra:
+                    c['stage'] = 'reserve'
+                cands = sorted(cands+extra, key=lambda c: -c['score'])
+                stage = 'tested + reserve species (no tested species explains it)'
+        for c in cands:
+            c.setdefault('stage', 'tested' if groups else 'all')
+            c['line_forest'] = c['species'] in forests
+            c['low_specificity'] = c['species'] in lowspec
+        for c in cands[top:]:
+            c['companions'] = []          # keep the file small: companion tables only for the top candidates
+        excluded = coincident(f, catalogue, z, groups['excluded'], margin_kms) if groups else []
+        out[f['id']] = dict(feature=f, candidates=cands, stage=stage, excluded_coincident=excluded)
         sp = spectra[f['spw']]
         pad = max(f['freq_hi_GHz']-f['freq_lo_GHz'], 0.05)
         marks = [(t['expected_GHz'], f"{c['species']} {t['qns'] or ''}"[:28], figs.COLOURS[i % len(figs.COLOURS)])
-                 for i, c in enumerate(cands[:6]) for t in c['transitions']]
+                 for i, c in enumerate(cands[:6]) for t in c['transitions'][:4]]
         figs.spectrum(run.plot(f'feature_{f["id"]}'), sp['frequency'], sp['spectrum'], sp['noise'], [dict(f, significant=f['significant'])],
-                      title=f"{f['id']}: candidates (top {min(6, len(cands))})", z=z, marks=marks,
+                      title=f"{f['id']}: candidates (top {min(6, len(cands))} of {len(cands)})", z=z, marks=marks,
                       xlim=(f['freq_lo_GHz']-pad, f['freq_hi_GHz']+pad))
         for i, c in enumerate(cands[:top]):
             if c['companions']:
                 figs.companions(run.plot(f'companions_{f["id"]}_{i+1}'), c['companions'],
                                 f"{f['id']} as {c['species']}: companions at T = {c['best_T']:g} K (f_max {c['fmax']:.2f})")
-    run.save('candidates', dict(z=z, margin_kms=margin_kms, include=include, T_grid=T_GRID, features=out))
-    run.log('identify', f'{len(out)} features tested', margin_kms=margin_kms, include=include)
+    run.save('candidates', dict(z=z, margin_kms=margin_kms, include=include, species=species if groups else 'all', T_grid=T_GRID, features=out))
+    run.log('identify', f'{len(out)} features tested', margin_kms=margin_kms, include=include, species=species if groups else 'all')
     return out
 
 
@@ -217,9 +276,14 @@ def summary(out, top=5):
     for ident, d in out.items():
         f = d['feature']
         lines.append(f"{ident} ({f['sign'][:3]}, {f['freq_GHz']:.5f} GHz, {f['width_kms']:.0f} km/s, S/N {f['snr'] if f['snr'] is None else round(f['snr'], 1)}, "
-                     f"rel {f['reliability'] if f['reliability'] is None else round(f['reliability'], 2)}): {len(d['candidates'])} candidate species")
+                     f"rel {f['reliability'] if f['reliability'] is None else round(f['reliability'], 2)}): {len(d['candidates'])} candidate species "
+                     f"[{d.get('stage', 'all species')}]")
         for c in d['candidates'][:top]:
             fm = 'n/a' if c['fmax'] is None else f"{c['fmax']:.2f}"
             lines.append(f"    {c['score']:.2f}  {c['species']:<28} dv {c['offset_kms']:+6.0f} km/s  f_max {fm} at T={c['best_T']}  "
-                         f"companions: {c['companions_supported']} seen of {c['companions_testable']} testable, {c['companions_missing']} missing  prior {c['prior']:.2f} {' '.join(c['flags'])}")
+                         f"companions: {c['companions_supported']} seen of {c['companions_testable']} testable, {c['companions_missing']} missing  prior {c['prior']:.2f} {' '.join(c['flags'])}"
+                         + ('  [reserve]' if c.get('stage') == 'reserve' else '') + ('  [line forest]' if c.get('line_forest') else '') + ('  [low specificity]' if c.get('low_specificity') else ''))
+        if d.get('excluded_coincident'):
+            ex = d['excluded_coincident']
+            lines.append(f"    (also has lines here, excluded by the species screen: {len(ex)}, e.g. {', '.join(ex[:5])})")
     return '\n'.join(lines)

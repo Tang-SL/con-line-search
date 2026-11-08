@@ -123,6 +123,19 @@ robustness to the noise. It finishes with a weblog (`runs/<target>_<date>/weblog
 plots for every step, the line solution with evidence and rejected alternatives, line
 properties (fluxes, L′, L) and moment and per-line maps as FITS.
 
+Before identifying anything, the agent writes an **identification strategy** for reviewers:
+which species it tests and why (the expectation list from the source type and literature), and
+which it leaves out. The `plan` step screens the catalogue:
+- **Test:** expected species and species bright in galaxies, tried for every feature.
+- **Reserve:** common species, and isotopologues and excited states of tested species. Tried
+  only for significant features that nothing else explains.
+- **Excluded:** everything else, never tried automatically.
+
+Species whose many lines would "match" almost any frequency (line forests such as large
+organics, measured by the chance-match probability P_c) are left out: a single frequency match
+with them carries no information. Candidate lists therefore stay short, and the weblog shows each
+choice with its reason.
+
 The tools are a command-line toolkit that can also be used directly:
 
 ```bash
@@ -133,6 +146,7 @@ scripts/agent context  --run runs/X --name "IRAS 17208-0014"
 scripts/agent detect   --run runs/X
 scripts/agent extract  --run runs/X
 scripts/agent catalog  --run runs/X --z 0.0428
+scripts/agent plan     --run runs/X --expect "HCN; HCO+; HCN v2=1"   # which species to test, and why
 scripts/agent identify --run runs/X
 scripts/agent blend    --run runs/X --hypothesis hyps.json
 scripts/agent robust   --run runs/X --hypotheses hyps.json --n 100

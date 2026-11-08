@@ -36,6 +36,19 @@ relying on any number here for a specific source, check the source's own literat
   - H31α in Arp 220 was really vibrationally excited HC₃N (Martín et al. 2011).
   - In broad-line sources, recombination-line claims need unbiased coverage.
 
+- **Decide what to test before matching.** The surveys above fit a list of species chosen in
+  advance (detected in the source or in similar sources), adding species in order of expected
+  brightness. They do not ask the catalogue what could lie at each frequency. Do the same: test
+  the expected and bright species first (`plan`), and widen the search only for features they
+  cannot explain.
+- **Chance coincidence.** In a dense catalogue almost every frequency is within a line width of
+  some transition. The chance-match probability, P_c, is the fraction of the band within ±(half
+  the line width) of a species' strong lines.
+  - For large organics with hundreds of transitions, P_c approaches 1. A "match" then carries no
+    information, and such species can only be claimed through a full multi-line model.
+  - Broad lines raise P_c for every species. In ULIRGs even a two-line species can cover half the
+    band.
+
 ## 2. Is a feature real? (significance and fidelity)
 
 - **Look-elsewhere effect.** A search over N_beams × N_channels independent elements finds

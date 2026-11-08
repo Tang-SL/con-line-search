@@ -1,7 +1,7 @@
 """Weblog: a static HTML report of a run folder (open weblog/index.html in a browser).
 
 Sections follow the analysis: summary -> data -> source context -> detection -> significance ->
-identification -> blends & robustness -> solution & properties -> maps -> provenance. Each
+identification strategy -> identification -> blends & robustness -> solution & properties -> maps -> provenance. Each
 section shows the step's results and plots, and the agent's reasoning from notes/<section>.md.
 """
 from pathlib import Path
@@ -12,8 +12,8 @@ import re
 import shutil
 
 SECTIONS = [('summary', 'Summary'), ('data', 'Data'), ('context', 'Source context & literature'), ('detection', 'Line search'),
-            ('significance', 'Significance'), ('identification', 'Identification'), ('blends', 'Blends & robustness'),
-            ('solution', 'Line solution & properties'), ('maps', 'Maps'), ('provenance', 'Provenance')]
+            ('significance', 'Significance'), ('strategy', 'Identification strategy'), ('identification', 'Identification'),
+            ('blends', 'Blends & robustness'), ('solution', 'Line solution & properties'), ('maps', 'Maps'), ('provenance', 'Provenance')]
 
 CSS = """
 :root{--ink:#173047;--muted:#5b6b7a;--line:#dbe3ea;--bg:#f7f9fc;--card:#fff;--accent:#138c87;--good:#166534;--warn:#92400e;--bad:#991b1b}
@@ -249,6 +249,39 @@ def section_significance(run, out, plots):
     out.append(img(plots, 'bump_maps.png'))
 
 
+def section_strategy(run, out, plots):
+    plan = run.load('plan') if run.has('plan') else None
+    out.append(notes(run, 'strategy'))
+    if not plan:
+        if not out[-1]:
+            out.append('<p class=small>No species screen in this run (the `plan` step was not run): every catalogue species was tested.</p>')
+        return
+    c = plan['counts']
+    out.append(f"<p>Species screen of the catalogue for the observed windows ({plan['bandwidth_GHz']:.2f} GHz): "
+               f"<b>{c['test']}</b> species tested for every feature, <b>{c['reserve']}</b> in reserve (tried only for features that the tested "
+               f"species cannot explain), <b>{c['excluded']}</b> excluded. P<sub>c</sub> is the chance that a feature at a random frequency "
+               f"matches the species: the fraction of the band within ±{plan['half_width_kms']:.0f} km/s of one of its strong lines (within 10× of "
+               f"its strongest, LTE {plan['T_ref']:g} K). Above {plan['pmax']:.2f} a single match says little: a <i>line forest</i> (many strong "
+               f"lines, e.g. large organics) can only be claimed through a full multi-line model, and a <i>low-specificity</i> species (few lines, "
+               f"but broad features) only through consistent companions or a strong prior.</p>")
+    if plan.get('unmatched_expect'):
+        out.append(f"<p class=missing>Expected species with no transition in the observed windows: {e(', '.join(plan['unmatched_expect']))}</p>")
+    def label(r):
+        t = ' <span class="tag warn">line forest</span>' if r['line_forest'] else ' <span class="tag warn">low specificity</span>' if r.get('low_specificity') else ''
+        return e(r['species'])+(f"<br><span class=small>= {e(r['aliases'][0])}</span>" if r.get('aliases') else '')+t
+    cols = [('Species', label, False),
+            ('Why', lambda r: e(r['reason']), False), ('Lines in band', lambda r: str(r['n_lines']), True),
+            ('P_c (chance match)', lambda r: num(r['p_coincidence'], '{:.2f}'), True),
+            ('Strongest line', lambda r: f"{e(r['strongest']['qns'])} {r['strongest']['rest_GHz']:.4f} GHz (E<sub>u</sub> {num(r['strongest']['Eu_K'], '{:.0f}')} K)", False)]
+    groups = {d: [r for r in plan['species'] if r['decision'] == d] for d in ('test', 'reserve', 'excluded')}
+    out.append('<h3>Species tested</h3>'+table(groups['test'], cols))
+    out.append(f"<details><summary>Reserve ({len(groups['reserve'])})</summary>{table(groups['reserve'], cols)}</details>")
+    out.append(f"<details><summary>Excluded ({len(groups['excluded'])})</summary>{table(groups['excluded'], cols)}</details>")
+    out.append('<p class=small>Full screen: <a href="products/species_screen.csv">species_screen.csv</a>.</p>')
+    for p in sorted(plots.glob('strategy_*.png')):
+        out.append(img(plots, p.name))
+
+
 def section_identification(run, out, plots):
     cands = run.load('candidates', {})
     out.append(notes(run, 'identification'))
@@ -256,9 +289,13 @@ def section_identification(run, out, plots):
         f = d['feature']
         out.append(f"<h3>{e(fid)} · {e(f['sign'])} · {f['freq_GHz']:.5f} GHz · {f['width_kms']:.0f} km/s</h3>")
         out.append(notes(run, f'identification_{fid}'))
+        if d.get('stage'):
+            ex = d.get('excluded_coincident') or []
+            out.append(f"<p class=small>Candidates from: {e(d['stage'])}."
+                       + (f" Excluded by the species screen but with a line here: {len(ex)} ({e(', '.join(ex[:8]))}{', …' if len(ex) > 8 else ''})." if ex else '') + '</p>')
         out.append(img(plots, f'feature_{fid}.png'))
         out.append(table(d['candidates'][:10], [
-            ('Score', lambda c: num(c['score'], '{:.2f}'), True), ('Species', lambda c: e(c['species'])+'<br><span class=small>'+e(', '.join(c['flags']))+'</span>', False),
+            ('Score', lambda c: num(c['score'], '{:.2f}'), True), ('Species', lambda c: e(c['species'])+'<br><span class=small>'+e(', '.join(c['flags']+(['reserve'] if c.get('stage') == 'reserve' else [])+(['line forest'] if c.get('line_forest') else [])+(['low specificity'] if c.get('low_specificity') else [])))+'</span>', False),
             ('Transitions in feature', lambda c: '<br>'.join(f"{e(t['qns'])} {t['rest_GHz']:.5f} (E<sub>u</sub> {num(t['Eu_K'], '{:.0f}')} K)" for t in c['transitions'][:4]), False),
             ('Δv (km/s)', lambda c: num(c['offset_kms'], '{:+.0f}'), True), ('f_max', lambda c: num(c['fmax'], '{:.2f}'), True),
             ('T (K)', lambda c: num(c['best_T'], '{:.0f}'), True),
@@ -341,7 +378,7 @@ def _sections(run, plots, prefix=''):
     """HTML <section> blocks of one run; ids are prefixed (e.g. 'b5-') when several runs share a page."""
     funcs = dict(summary=lambda o: section_summary(run, o), data=lambda o: section_data(run, o, plots), context=lambda o: section_context(run, o, plots),
                  detection=lambda o: section_detection(run, o, plots), significance=lambda o: section_significance(run, o, plots),
-                 identification=lambda o: section_identification(run, o, plots), blends=lambda o: section_blends(run, o, plots),
+                 strategy=lambda o: section_strategy(run, o, plots), identification=lambda o: section_identification(run, o, plots), blends=lambda o: section_blends(run, o, plots),
                  solution=lambda o: section_solution(run, o, plots), maps=lambda o: section_maps(run, o, plots),
                  provenance=lambda o: section_provenance(run, o, plots))
     body = []
@@ -387,7 +424,7 @@ def build(run, title=None):
 
 
 TOP = [('summary', 'Summary'), ('data', 'Data'), ('context', 'Source context & literature')]
-BAND = [('detection', 'Line search'), ('significance', 'Significance'), ('identification', 'Identification'),
+BAND = [('detection', 'Line search'), ('significance', 'Significance'), ('strategy', 'Identification strategy'), ('identification', 'Identification'),
         ('blends', 'Blends & robustness'), ('solution', 'Line solution & properties'), ('maps', 'Maps')]
 
 
@@ -419,7 +456,7 @@ def build_combined(parts, out_dir, title, notes_dir=None):
             _SKIP_NOTES = old
         return rel(''.join(part), sid)
     fns = dict(summary=lambda r, o, p: section_summary(r, o), data=section_data, context=section_context, detection=section_detection,
-               significance=section_significance, identification=section_identification, blends=section_blends,
+               significance=section_significance, strategy=section_strategy, identification=section_identification, blends=section_blends,
                solution=section_solution, maps=section_maps, provenance=section_provenance)
     nav, body = [], []
     def note_html(key):
