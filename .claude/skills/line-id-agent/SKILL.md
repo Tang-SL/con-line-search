@@ -182,6 +182,51 @@ and the `alternatives`, each with why it was not adopted. Write `notes/solution.
 
 Keep it short. The weblog holds the details.
 
+## Several bands or datasets of one source
+
+When one source has data in more than one band (or several separate datasets), process each
+band as its own run and report them together in **one** weblog.
+
+**Runs.**
+- One run per band: `runs/<target>_<BAND>_<YYYYMMDD>` (e.g. `IC860_B5_…`, `IC860_B7_…`).
+  Several tunings of one band can share a run: cube keys then carry the member OUS
+  (`X2157-spw25`).
+- Do the literature once: run `context` in the first run, copy its `literature.json` to the
+  others, and run `context --no-literature` there.
+- Use the same redshift and the same nuclear position in every run. Check the line list across
+  bands: a transition in one band is a companion test for the same species in another (e.g.
+  HC₃N 20–19 in Band 5 with 34–33 in Band 7).
+
+**Notes.** High-level text is written once, in a merged notes folder, e.g.
+`runs/<target>_combined_notes/`:
+- `summary.md`: one summary for all bands, with a single line table (line, rest frequency,
+  band, status, key evidence), the main caveats and next steps.
+- `data.md`: what the datasets are and the shared method; band-specific details stay in each
+  run's `notes/data.md`.
+- `context.md`: source context, literature and one expectation list per band.
+- `provenance.md`: toolkit changes, analyst choices and products for all runs.
+
+Each run keeps only band-specific notes (`data.md`, `detection.md`, `significance.md`,
+`identification*.md`, `blends.md`, `solution.md`, `maps.md`). Do not repeat the summary or
+context inside a band.
+
+**Weblog structure.** Build it with
+
+    scripts/agent combine --run runs/<target>_weblog --title "<target> line identification: …" \
+        --notes runs/<target>_combined_notes \
+        --part runs/<target>_B5_<date>:"Band 5 (… GHz)":b5 --part runs/<target>_B7_<date>:"Band 7 (… GHz)":b7
+
+The page then follows this order:
+1. **Summary** (merged), with each band's adopted line table.
+2. **Data**: the merged note, then one subsection per band.
+3. **Source context & literature**: once.
+4. **One sub-index per band**, holding only its line identification: Line search,
+   Significance, Identification, Blends & robustness (only if fitted), Line solution, Maps.
+5. **Provenance** (merged), with each run's step log.
+
+Open the page and check that every plot and link works. Give the user the combined weblog path;
+the per-band weblogs (`scripts/agent report`) remain available for a single band.
+
 ## Notes (what the weblog shows)
 
 `notes/summary.md`, `data.md`, `context.md`, `detection.md`, `significance.md`,

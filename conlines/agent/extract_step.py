@@ -96,9 +96,13 @@ def run(run, how='auto', ra=None, dec=None, radius_arcsec=None, threshold=8., re
     for f in features:
         f['neighbours'] = scores.get(f['id'], {}).get('neighbours')
         f['reliable'] = f['reliability'] is not None and f['reliability'] >= min_reliability
+        if f['reliability'] is None and 'reliability untestable' not in f['flags']:
+            f['flags'] = list(f['flags'])+['reliability untestable']      # no control zone as large as the source region
         f['verdict'] = ('significant and reliable' if f['significant'] and f['reliable'] else
                         'reliable but not significant in the aperture' if f['reliable'] else
-                        'significant in the aperture but possibly an artefact' if f['significant'] else 'weak / likely artefact')
+                        'significant; reliability untestable (field too small for controls)' if f['significant'] and f['reliability'] is None else
+                        'significant in the aperture but possibly an artefact' if f['significant'] else
+                        'weak; reliability untestable' if f['reliability'] is None else 'weak / likely artefact')
     # Trials (look-elsewhere): independent spatial-spectral elements searched.
     trials = {}
     for key, r in inv.items():

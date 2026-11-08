@@ -135,7 +135,12 @@ def img(plots, name, alt=''):
     return f'<img src="plots/{e(name)}" alt="{e(alt or name)}" loading="lazy">' if p.exists() else ''
 
 
+_SKIP_NOTES = set()          # note keys left out (the combined weblog shows merged notes instead)
+
+
 def notes(run, key):
+    if key in _SKIP_NOTES:
+        return ''
     p = run.path/'notes'/f'{key}.md'
     if not p.exists():
         return ''
@@ -180,6 +185,11 @@ def section_data(run, out, plots):
     out.append(img(plots, 'coverage.png'))
     for r in inv['cubes']:
         out.append(f"<h3>{e(r['key'])}</h3>"+img(plots, f"inspect_{r['key']}.png"))
+    # optional continuum-subtraction diagnostics made by the agent
+    extra = sorted(p.name for p in plots.glob('contsub_*.png'))+['linefree_residual_maps.png', 'b7_binned_overview.png']
+    shown = [img(plots, n) for n in extra if (plots/n).exists()]
+    if shown:
+        out.append('<h3>Continuum-subtraction diagnostics</h3>'+''.join(shown))
 
 
 def section_context(run, out, plots):
@@ -235,6 +245,8 @@ def section_significance(run, out, plots):
         out.append('<p class=small>Independent elements searched (look-elsewhere): '+'; '.join(f"{e(k)}: {v['independent_elements']:.2e}" for k, v in t.items())+'</p>')
     for k in feats['spectra']:
         out.append(f'<h3>{e(k)}</h3>'+img(plots, f'spectrum_{k}.png'))
+    out.append(img(plots, 'binned_spectra.png'))      # optional diagnostics, shown when the agent made them
+    out.append(img(plots, 'bump_maps.png'))
 
 
 def section_identification(run, out, plots):
@@ -258,6 +270,8 @@ def section_identification(run, out, plots):
 
 def section_blends(run, out, plots):
     out.append(notes(run, 'blends'))
+    out.append(img(plots, 'hco_hcn_template.png'))    # optional diagnostic
+    out.append(img(plots, 'f041_shape_tests.png'))
     for p in sorted(run.path.glob('blend_*.json')):
         b = json.loads(p.read_text())
         out.append(f"<h3>{e(b['name'])}</h3><p>Shared shape: {e(b['shape_text'])} · reduced χ² {b['reduced_chi2']:.2f} · BIC {b['bic']:.1f}"
@@ -323,36 +337,45 @@ def section_provenance(run, out, plots):
                'ASPECS (González-López et al. 2019).</p>')
 
 
-def build(run, title=None):
-    out_dir = run.path/'weblog'
-    out_dir.mkdir(exist_ok=True)
-    for sub in ('plots', 'products'):
-        target = out_dir/sub
-        if target.is_symlink() or target.exists():
-            if target.is_symlink() or target.is_file():
-                target.unlink()
-            else:
-                shutil.rmtree(target)
-        shutil.copytree(run.path/sub, target)
-    plots = out_dir/'plots'
-    state = run.state
-    title = title or f"Line identification: {state.get('target') or run.path.name}"
-    body = []
+def _sections(run, plots, prefix=''):
+    """HTML <section> blocks of one run; ids are prefixed (e.g. 'b5-') when several runs share a page."""
     funcs = dict(summary=lambda o: section_summary(run, o), data=lambda o: section_data(run, o, plots), context=lambda o: section_context(run, o, plots),
                  detection=lambda o: section_detection(run, o, plots), significance=lambda o: section_significance(run, o, plots),
                  identification=lambda o: section_identification(run, o, plots), blends=lambda o: section_blends(run, o, plots),
                  solution=lambda o: section_solution(run, o, plots), maps=lambda o: section_maps(run, o, plots),
                  provenance=lambda o: section_provenance(run, o, plots))
+    body = []
     for key, label in SECTIONS:
         part = []
         try:
             funcs[key](part)
         except Exception as ex:      # one broken section must not lose the report
             part.append(f'<p class=missing>Could not build this section: {e(ex)}</p>')
-        body.append(f'<section id="{key}"><h2>{e(label)}</h2>{"".join(part)}</section>')
+        body.append(f'<section id="{prefix}{key}"><h2>{e(label)}</h2>{"".join(part)}</section>')
     extra = sorted(p for p in (run.path/'notes').glob('*.md') if p.stem not in {k for k, _ in SECTIONS} and not p.stem.startswith('identification_'))
     if extra:
-        body.append('<section id="other"><h2>Other notes</h2>'+''.join(f'<h3>{e(p.stem)}</h3><div class=notes>{markdown(p.read_text())}</div>' for p in extra)+'</section>')
+        body.append(f'<section id="{prefix}other"><h2>Other notes</h2>'+''.join(f'<h3>{e(p.stem)}</h3><div class=notes>{markdown(p.read_text())}</div>' for p in extra)+'</section>')
+    return body
+
+
+def _copy_outputs(run, dest):
+    dest.mkdir(parents=True, exist_ok=True)
+    for sub in ('plots', 'products'):
+        target = dest/sub
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+        elif target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(run.path/sub, target)
+
+
+def build(run, title=None):
+    out_dir = run.path/'weblog'
+    _copy_outputs(run, out_dir)
+    plots = out_dir/'plots'
+    state = run.state
+    title = title or f"Line identification: {state.get('target') or run.path.name}"
+    body = _sections(run, plots)
     nav = ''.join(f'<a href="#{k}">{e(l)}</a>' for k, l in SECTIONS)
     stamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
     page = (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -360,4 +383,84 @@ def build(run, title=None):
             f'<h1>{e(title)}</h1><div class=sub>Weblog generated {stamp}</div>{"".join(body)}</main></body></html>')
     (out_dir/'index.html').write_text(page)
     run.log('report', 'weblog written', path=str(out_dir/'index.html'))
+    return out_dir/'index.html'
+
+
+TOP = [('summary', 'Summary'), ('data', 'Data'), ('context', 'Source context & literature')]
+BAND = [('detection', 'Line search'), ('significance', 'Significance'), ('identification', 'Identification'),
+        ('blends', 'Blends & robustness'), ('solution', 'Line solution & properties'), ('maps', 'Maps')]
+
+
+def build_combined(parts, out_dir, title, notes_dir=None):
+    """One weblog for several runs of one source (e.g. one run per ALMA band).
+
+    Structure: merged high-level sections first (Summary, Data, Source context & literature), then one
+    sub-index per run with only its line-identification sections, then merged Provenance.
+    parts: list of (run, label, short_id). notes_dir: folder with the merged notes summary.md, data.md,
+    context.md and provenance.md; a merged note replaces the runs' own notes of that section, so the
+    high-level text is not repeated per run. Plots and products of each run go to out_dir/<short_id>/.
+    """
+    out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
+    notes_dir = Path(notes_dir) if notes_dir else None
+    merged = lambda key: (notes_dir/f'{key}.md') if notes_dir and (notes_dir/f'{key}.md').exists() else None
+    for run, _, sid in parts:
+        _copy_outputs(run, out_dir/sid)
+    def rel(html_, sid):
+        return re.sub(r'(src|href)="(plots|products)/', lambda m: f'{m.group(1)}="{sid}/{m.group(2)}/', html_)
+    def one(fn, run, sid, skip=()):
+        global _SKIP_NOTES
+        part, old = [], _SKIP_NOTES
+        _SKIP_NOTES = set(skip)
+        try:
+            fn(run, part, out_dir/sid/'plots')
+        except Exception as ex:
+            part.append(f'<p class=missing>Could not build this section: {e(ex)}</p>')
+        finally:
+            _SKIP_NOTES = old
+        return rel(''.join(part), sid)
+    fns = dict(summary=lambda r, o, p: section_summary(r, o), data=section_data, context=section_context, detection=section_detection,
+               significance=section_significance, identification=section_identification, blends=section_blends,
+               solution=section_solution, maps=section_maps, provenance=section_provenance)
+    nav, body = [], []
+    def note_html(key):
+        m = merged(key)
+        return f'<div class=notes>{markdown(m.read_text())}</div>' if m else ''
+    # 1. merged high-level sections
+    for key, label in TOP:
+        html_ = note_html(key)
+        if key == 'context':                       # same source: show the first run's facts and literature once
+            run, _, sid = parts[0]
+            html_ += one(fns[key], run, sid, skip={'context'} if merged('context') else ())
+        else:
+            for run, lab, sid in parts:            # per-run results under a heading; the run's own note only if no merged one
+                skip = {key} if (merged(key) and key == 'summary') else set()
+                inner = one(fns[key], run, sid, skip)
+                html_ += f'<h3>{e(lab)}</h3>{inner}'
+        body.append(f'<section id="{key}"><h2>{e(label)}</h2>{html_}</section>')
+        nav.append(f'<a href="#{key}">{e(label)}</a>')
+    # 2. one sub-index per run: line identification only
+    for run, lab, sid in parts:
+        secs, links = [], []
+        for key, label in BAND:
+            inner = one(fns[key], run, sid)
+            if not re.sub(r'<[^>]+>', '', inner).strip():
+                continue                           # nothing to show (e.g. no blend fits in this run)
+            secs.append(f'<section id="{sid}-{key}"><h2>{e(label)}</h2>{inner}</section>')
+            links.append((key, label))
+        contents = ' · '.join(f'<a href="#{sid}-{k}">{e(l)}</a>' for k, l in links)
+        body.append(f'<div class=band id="{sid}"><h1 class=bandtitle>{e(lab)}</h1><p class=small>Contents: {contents}</p>{"".join(secs)}</div>')
+        nav.append(f'<a class=bandlink href="#{sid}">{e(lab)}</a>'+''.join(f'<a class=subl href="#{sid}-{k}">{e(l)}</a>' for k, l in links))
+    # 3. merged provenance, with each run's step log
+    html_ = note_html('provenance')
+    for run, lab, sid in parts:
+        inner = one(fns['provenance'], run, sid, skip={'provenance'} if merged('provenance') else ())
+        html_ += f'<details><summary>{e(lab)}: run notes and step log</summary>{inner}</details>'
+    body.append(f'<section id="provenance"><h2>Provenance</h2>{html_}</section>')
+    nav.append('<a class=bandlink href="#provenance">Provenance</a>')
+    stamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+    css = CSS+'.bandlink{margin-top:14px;font-weight:700;color:#fff!important}.subl{padding-left:20px!important;font-size:13px!important}.bandtitle{margin:30px 0 12px;font-size:24px;border-bottom:3px solid var(--accent);padding-bottom:6px}'
+    page = (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<title>{e(title)}</title><style>{css}</style></head><body><nav><b>{e(title)}</b>{"".join(nav)}</nav><main>'
+            f'<h1>{e(title)}</h1><div class=sub>Weblog generated {stamp}</div>{"".join(body)}</main></body></html>')
+    (out_dir/'index.html').write_text(page)
     return out_dir/'index.html'

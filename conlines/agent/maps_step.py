@@ -48,7 +48,7 @@ def run(run, baseline='linear', zoom=4., local=True):
         if key not in cubes:
             cubes[key] = read_cube(run.cubes()[key]['path'])
         return cubes[key]
-    products, panels = [], []
+    products, panels, skipped = [], [], []
     done_fits = set()
     for e in sol['lines']:
         if e['status'] == 'unidentified' and not e['lines']:
@@ -56,7 +56,10 @@ def run(run, baseline='linear', zoom=4., local=True):
         f = feats[e['feature']]; cube = cube_of(f['spw'])
         main = e['lines'][0] if e['lines'] else None
         rest = main['rest_GHz'] if main else f['freq_GHz']*(1+z)
-        im, h = moment(cube, f['lo'], f['hi'], rest, z, baseline)
+        try:
+            im, h = moment(cube, f['lo'], f['hi'], rest, z, baseline)
+        except ValueError as err:              # e.g. a feature at a band edge with no baseline on one side
+            skipped.append(f"{e['feature']}: no map ({err})"); continue
         name = (main['species'] if main else 'unidentified').replace(' ', '').replace(',', '_')[:30]
         h['LINEID'] = (main['species'] if main else 'unidentified').encode('ascii', 'replace').decode()[:60]
         h['IDSTAT'] = e['status'].upper()
@@ -101,6 +104,9 @@ def run(run, baseline='linear', zoom=4., local=True):
         figs.maps(path, p['images'], p['titles'], p['centre'] if p['centre'][0] is not None else None, zoom, units=p['units'])
         plots.append(dict(plot=path.name, blend=p.get('blend'), warnings=p.get('warnings', [])))
     result = dict(products=products, plots=plots, baseline=baseline, local=local)
+    if skipped:
+        result['skipped'] = skipped
+        (plots[0]['warnings'] if plots else []).extend(skipped)
     run.save('maps', result)
     run.log('maps', f'{len(products)} FITS products', baseline=baseline)
     return result

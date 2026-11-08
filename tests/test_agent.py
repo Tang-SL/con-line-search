@@ -149,3 +149,65 @@ def test_agent_pipeline_end_to_end(tmp_path, monkeypatch, capsys):
         assert (run.path/'weblog'/src).exists(), src
     main(['status', '--run', r])
     assert 'solution' in capsys.readouterr().out
+
+
+def test_ads_standard_queries_avoid_unsupported_object_field():
+    from conlines.agent.context import standard_queries
+    queries = standard_queries('IRAS 17208-0014', ['IRAS F17207-0014'])
+    assert all('object:' not in q for q in queries.values())
+    assert all('abs:"IRAS 17208-0014"' in q for q in queries.values())
+
+
+def test_ned_reads_current_column_names(monkeypatch):
+    from astropy.table import Table
+    from astroquery.ipac.ned import Ned
+    from conlines.agent import context
+    obj = Table(dict(zip(['Object Name', 'RA', 'Dec', 'Redshift (z)', 'Phys Type'],
+                         [['X'], [260.84], [-0.28], [0.04281], ['G']])))
+    phot = Table(dict(zip(['Bandpass', 'Frequency (Hz)', 'Flux Density', 'Reference'],
+                          [['60 microns (IRAS)'], [5e12], [32.13], ['ref']])))
+    monkeypatch.setattr(Ned, 'query_object', lambda name: obj)
+    monkeypatch.setattr(Ned, 'get_table', lambda name, table: phot)
+    out = context.ned('X')
+    assert out['redshift'] == 0.04281 and out['type'] == 'G' and out['dec'] == -0.28
+    assert context.iras_fluxes(out['photometry']) == {60: 32.13}
+    assert 'photometry_error' not in out
+
+
+def test_discover_keeps_tunings_that_reuse_spw_numbers(tmp_path):
+    from conlines.agent.data import discover
+    for mous in ('X2143', 'X2157'):
+        for spw in (25, 27):
+            (tmp_path/f'member.uid___A001_X2d20_{mous}.IC_860_sci.spw{spw}.cube.I.pbcor.fits').write_bytes(b'')
+    cubes, _, _ = discover(tmp_path)
+    assert sorted(c['key'] for c in cubes) == ['X2143-spw25', 'X2143-spw27', 'X2157-spw25', 'X2157-spw27']
+
+
+def test_reliability_untestable_when_control_zones_are_tiny():
+    from conlines.reliability import detection_reliability
+    props = [dict(sign='Absorption', peak_snr=10., channels=8), dict(sign='Absorption', peak_snr=12., channels=9)]
+    out = detection_reliability(props, [0.01, 0.30], 0.2, dict(inside=1000, near=50, far=0))
+    assert out[0]['reliability'] is None          # 50-pixel zone cannot calibrate a 1000-pixel region
+    out = detection_reliability(props, [0.01, 0.30], 0.2, dict(inside=1000, near=5000, far=0))
+    assert out[0]['reliability'] is not None
+
+
+def test_combined_weblog_merges_high_level_sections(tmp_path):
+    from conlines.agent.rundir import Run
+    from conlines.agent import report
+    runs = []
+    for name in ('a', 'b'):
+        d = tmp_path/name
+        for sub in ('plots', 'products', 'notes'):
+            (d/sub).mkdir(parents=True)
+        (d/'notes'/'summary.md').write_text(f'Own summary of {name}.')
+        (d/'notes'/'detection.md').write_text(f'Detection notes of {name}.')
+        runs.append(Run(d))
+    nd = tmp_path/'merged'; nd.mkdir()
+    (nd/'summary.md').write_text('Merged summary.'); (nd/'context.md').write_text('Merged context.')
+    out = report.build_combined([(runs[0], 'Band A', 'ba'), (runs[1], 'Band B', 'bb')], tmp_path/'web', 'Combined', nd)
+    page = out.read_text()
+    assert page.count('Merged summary.') == 1 and 'Own summary of a.' not in page       # high-level text once, not per band
+    assert 'id="summary"' in page and 'id="context"' in page and 'id="provenance"' in page
+    assert 'id="ba-detection"' in page and 'id="bb-detection"' in page and 'id="ba-summary"' not in page
+    assert 'Detection notes of b.' in page and (tmp_path/'web'/'bb'/'plots').is_dir()

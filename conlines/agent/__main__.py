@@ -62,10 +62,22 @@ def main(argv=None):
     s = cmd('maps'); s.add_argument('--baseline', default='linear', choices=['linear', 'constant', 'none']); s.add_argument('--fixed-shape', action='store_true')
     s.add_argument('--zoom', type=float, default=4.)
     s = cmd('report'); s.add_argument('--title')
+    s = cmd('combine'); s.add_argument('--part', action='append', required=True, metavar='RUN:LABEL[:ID]',
+                                       help='a run folder to include, its heading and a short id (repeat)')
+    s.add_argument('--title', required=True)
+    s.add_argument('--notes', help='folder with merged notes: summary.md, data.md, context.md, provenance.md')
     cmd('status')
     a = p.parse_args(argv)
 
     from .rundir import Run
+    if a.step == 'combine':                 # --run is the output folder here, not an analysis run
+        from . import report
+        parts = []
+        for i, spec in enumerate(a.part):
+            bits = spec.split(':')
+            parts.append((Run(bits[0]), bits[1] if len(bits) > 1 else bits[0], bits[2] if len(bits) > 2 else f'part{i+1}'))
+        print(report.build_combined(parts, a.run, a.title, a.notes))
+        return
     run = Run(a.run)
 
     if a.step == 'data':

@@ -45,17 +45,30 @@ def ned(name):
     if table is None or len(table) == 0:
         return None
     r = table[0]
-    out = dict(name=str(r['Object Name']), type=str(r['Type']), redshift=float(r['Redshift']) if r['Redshift'] is not None and str(r['Redshift']) not in ('--', 'nan') else None,
-               ra=float(r['RA']), dec=float(r['DEC']))
+    def col(*names):        # NED has renamed columns over time ('Redshift' -> 'Redshift (z)', 'Type' -> 'Phys Type')
+        for n in names:
+            if n in table.colnames:
+                v = r[n]
+                return None if getattr(v, 'mask', False) or str(v) in ('--', 'nan', '') else v
+        return None
+    z = col('Redshift (z)', 'Redshift')
+    out = dict(name=str(col('Object Name')), type=str(col('Phys Type', 'Type')), redshift=float(z) if z is not None else None,
+               ra=float(col('RA')), dec=float(col('Dec', 'DEC')))
     try:
         phot = Ned.get_table(name, table='photometry')
         rows = []
+        def pcol(p, *names):
+            for n in names:
+                if n in phot.colnames:
+                    v = p[n]
+                    return None if getattr(v, 'mask', False) or str(v) in ('--', 'nan', '') else v
+            return None
         for p in phot:
-            freq = float(p['Frequency']) if str(p['Frequency']) not in ('--', 'nan') else None
-            flux = float(p['Flux Density']) if str(p['Flux Density']) not in ('--', 'nan') else None
+            freq, flux = pcol(p, 'Frequency (Hz)', 'Frequency'), pcol(p, 'Flux Density')
             if freq and flux:
-                rows.append(dict(band=str(p['Observed Passband']), frequency_Hz=freq, wavelength_um=2.99792458e14/freq,
-                                 flux_Jy=flux, reference=str(p['Refcode']) if 'Refcode' in phot.colnames else None))
+                freq, flux = float(freq), float(flux)
+                rows.append(dict(band=str(pcol(p, 'Bandpass', 'Observed Passband')), frequency_Hz=freq, wavelength_um=2.99792458e14/freq,
+                                 flux_Jy=flux, reference=str(pcol(p, 'Reference', 'Refcode'))))
         out['photometry'] = rows
     except Exception as e:     # photometry is optional
         out['photometry'] = []
@@ -133,13 +146,12 @@ def ads_search(query, rows=25, sort='citation_count desc', token=None):
 def standard_queries(name, aliases=()):
     """Literature searches the agent runs for every source (it can add its own)."""
     names = [name, *[a for a in aliases if a and a != name]][:4]
-    obj = ' OR '.join(f'object:"{n}"' for n in names)
-    title = ' OR '.join(f'abs:"{n}"' for n in names)
+    title = ' OR '.join(f'abs:"{n}"' for n in names)      # ADS has no object: field in the API any more
     return {
-        'molecular lines in this source': f'({obj}) AND abs:(molecular OR molecule OR "line survey" OR HCN OR HCO+ OR CO OR absorption)',
+        'molecular lines in this source': f'({title}) AND abs:(molecular OR molecule OR "line survey" OR HCN OR HCO+ OR CO OR absorption)',
         'ALMA / interferometer studies': f'({title}) AND abs:(ALMA OR NOEMA OR SMA OR PdBI OR interferometer)',
-        'nucleus: obscuration, AGN, starburst': f'({obj}) AND abs:(nucleus OR AGN OR obscured OR "compact obscured" OR starburst OR outflow)',
-        'most recent papers': f'({obj})',
+        'nucleus: obscuration, AGN, starburst': f'({title}) AND abs:(nucleus OR AGN OR obscured OR "compact obscured" OR starburst OR outflow)',
+        'most recent papers': f'({title})',
     }
 
 

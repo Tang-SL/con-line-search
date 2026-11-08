@@ -23,3 +23,6 @@ __pycache__/
 # User identification solutions
 /solutions/
 runs/
+
+# Claude Code local settings
+.claude/settings.local.json

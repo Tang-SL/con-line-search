@@ -88,7 +88,9 @@ def detection_reliability(props, radius, region_radius, areas, near_factor=3.):
         for zone, member in [('near', near), ('far', far)]:
             k = sum(1 for q, m in zip(props, member) if m and at_least(q))
             counts[zone] = k
-            if areas.get(zone, 0) > 0:
+            # A zone smaller than the source region (e.g. a small cutout) cannot measure an artefact
+            # rate: one chance artefact there would predict more false components than are observed.
+            if areas.get(zone, 0) >= max(areas.get('inside', 0), 1):
                 ratio = areas['inside']/areas[zone]
                 predictions.append((k*ratio, poisson_upper(k)*ratio))
         if not predictions:

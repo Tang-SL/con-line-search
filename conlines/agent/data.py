@@ -36,6 +36,12 @@ def _spw(name):
     return f'spw{m.group(1)}' if m else None
 
 
+def _mous(name):
+    """Member OUS of a pipeline product (e.g. 'X2157' from uid___A001_X2d20_X2157); None if absent."""
+    m = re.search(r'uid___A\d+_X[0-9a-fA-F]+_(X[0-9a-fA-F]+)', name)
+    return m.group(1) if m else None
+
+
 def _target(name):
     m = re.search(r'\.([^.]+)_sci\.', name)
     return m.group(1).replace('_', ' ') if m else None
@@ -57,10 +63,11 @@ def discover(folder):
         spw = _spw(p.name)
         if role == 'unknown' or spw is None:
             unknown.append(p); continue
-        g = groups.setdefault((_target(p.name) or '', spw), {})
+        g = groups.setdefault((_target(p.name) or '', _mous(p.name) or '', spw), {})   # tunings reuse spw numbers
         g.setdefault(role, str(p))
     cubes, notes = [], []
-    for (target, spw), g in sorted(groups.items(), key=lambda kv: (kv[0][0], int(kv[0][1][3:]))):
+    n_targets, n_mous = len({t for t, _, _ in groups}), len({m for _, m, _ in groups})
+    for (target, mous, spw), g in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1], int(kv[0][2][3:]))):
         path = g.get('cube') or g.get('cube_flat')
         if not path:
             continue
@@ -68,8 +75,9 @@ def discover(folder):
             notes.append(f'{spw}: only a non-primary-beam-corrected cube; fluxes away from the centre are underestimated.')
         if str(path).endswith('.gz'):
             notes.append(f'{spw}: the cube is gzip-compressed; reading it is slow and needs memory for the full cube.')
-        key = spw if len({t for t, _ in groups}) <= 1 else f'{target.replace(" ", "")}-{spw}'
-        cubes.append(dict(key=key, spw=spw, target=target or None, path=path, pb=g.get('pb'), mask=g.get('mask')))
+        key = spw if n_mous <= 1 else f'{mous}-{spw}'
+        key = key if n_targets <= 1 else f'{target.replace(" ", "")}-{key}'
+        cubes.append(dict(key=key, spw=spw, target=target or None, mous=mous or None, path=path, pb=g.get('pb'), mask=g.get('mask')))
     # Plain FITS cubes that do not follow ALMA naming: one per file.
     if not cubes:
         for p in unknown:
