@@ -158,8 +158,18 @@ testing, and explain why to the reviewers.
 - Ask question 2 for the leading candidates:
   - **Position**: is the predicted frequency inside the feature? Is the velocity offset
     reasonable? (For broad or self-absorbed lines the centroid is not meaningful.)
-  - **Companions**: f_max and companions seen/testable/missing. A missing companion is the
-    strongest evidence against a candidate. "0 testable" means untested, not confirmed.
+  - **Companions**: read `plots/companions_*.png`. The first panel is the feature; the others
+    show the spectrum where the candidate's other lines must appear, with the predicted line
+    in purple (the feature's own shape, scaled by LTE). Each candidate gets a verdict:
+    - *rejected*: a predicted line is missing. This is the strongest evidence against a
+      candidate.
+    - *partial*: it can make at most f_max of the feature; test it as a blend partner.
+    - *supported*: other lines are seen at the predicted strength.
+    - *inconclusive*: its testable lines fall on other features.
+    - *untested*: no other line is strong enough, or none falls in the windows. This means
+      untested, not confirmed.
+    Hyperfine components count as one line. T is reported near 150 K, with the range of
+    temperatures that give the same result.
   - **Prior**: is it an abundant species? Has it been seen in galaxies, or in this source?
   - **Excitation**: is E_up reachable at plausible temperatures? Vibrational lines need the
     CON conditions.

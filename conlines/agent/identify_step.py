@@ -33,6 +33,7 @@ from ..reliability import identification_probabilities
 from .catalog_step import strength
 from . import figs
 
+T_REF = 150.     # K: reported when the companion test does not depend on temperature
 T_GRID = (10., 20., 40., 80., 150., 300., 500.)
 # Priors from extragalactic line surveys (e.g. Martín 2011 review; Aladro et al. 2015; ALCHEMI):
 # BRIGHT species make the strongest features in galaxies; COMMON ones are widely detected but
@@ -110,6 +111,59 @@ def measure(freq, spec, noise, centre, width_kms, sign):
     return float(s*np.sum(spec[sel])*dv), float(np.sqrt(np.sum(noise[sel]**2))*dv)
 
 
+HF_TOL_KMS = 5.        # transitions of one species closer than this are one line (hyperfine structure)
+HF_LABEL = re.compile(r'\bF\d?\s*=')
+
+
+def merge_hyperfine(rows, tol_kms=HF_TOL_KMS):
+    """One entry per resolvable line of a species.
+
+    Catalogues list hyperfine components separately, often next to an entry for the whole
+    line (e.g. HCN v2=1 J=3-2 l=1e and its F=4-3, 3-2, 2-1 components within 1 MHz). Counted
+    separately they look like extra companion lines and double the predicted flux. Within each
+    group closer than tol_kms: keep the entry without an F quantum number if there is one,
+    otherwise sum the components (strength-weighted frequency, lowest E_u)."""
+    rows = sorted(rows, key=lambda r: r['rest_GHz'])
+    groups, out = [], []
+    for r in rows:
+        if groups and (r['rest_GHz']-groups[-1][-1]['rest_GHz'])/r['rest_GHz']*C <= tol_kms:
+            groups[-1].append(r)
+        else:
+            groups.append([r])
+    for g in groups:
+        if len(g) == 1:
+            out.append(g[0]); continue
+        total = [r for r in g if not HF_LABEL.search(str(r.get('qns') or ''))]
+        if total:
+            out.append(max(total, key=lambda r: r.get('S_mu2') or strength(r) or 0)); continue
+        w = np.array([(r.get('S_mu2') or strength(r) or 0.) for r in g])
+        merged = dict(g[int(np.argmax(w))])
+        if w.sum() > 0:
+            merged['rest_GHz'] = float(np.sum(w*[r['rest_GHz'] for r in g])/w.sum())
+            merged['S_mu2'] = float(w.sum())
+        merged['Eu_K'] = min((r.get('Eu_K') or 0.) for r in g)
+        merged['qns'] = HF_LABEL.split(str(g[0].get('qns') or ''))[0].rstrip(' ,')+f' ({len(g)} hf components)'
+        out.append(merged)
+    return out
+
+
+def verdict(c):
+    """Plain-language outcome of the companion test for one candidate."""
+    n = len(c.get('companions') or [])
+    if c['companions_missing'] and (c.get('fmax') or 0) >= .1:
+        return 'partial', (f"it cannot make the whole feature: its other lines limit it to at most {c['fmax']:.0%} "
+                           "(possible as a blend partner, to be tested with a blend fit)")
+    if c['companions_missing']:
+        return 'rejected', f"{c['companions_missing']} of its other lines should be clearly visible but are missing"
+    if c['companions_supported']:
+        return 'supported', f"{c['companions_supported']} of its other lines are seen at the predicted strength"
+    if c['companions_testable']:
+        return 'inconclusive', 'its testable lines fall on other features (blended), so they neither support nor reject it'
+    if n:
+        return 'untested', 'its other lines in these windows are predicted below the noise'
+    return 'untested', 'it has no other line in the observed windows'
+
+
 def candidates_for(feature, catalogue, spectra, z, margin_kms=100., sigma_kms=30., others=(), allowed=None):
     """Candidate species for one feature; `allowed` (a set of species names) restricts the list."""
     rows = catalogue['windows'][feature['spw']]['rows']
@@ -120,6 +174,7 @@ def candidates_for(feature, catalogue, spectra, z, margin_kms=100., sigma_kms=30
     for r in inside:
         if allowed is None or r['species'] in allowed:
             by_species.setdefault(r['species'], []).append(r)
+    by_species = {k: merge_hyperfine(v) for k, v in by_species.items()}
     out = []
     for species, trans in by_species.items():
         # all transitions of this species in every window, with their own spectra
@@ -128,15 +183,13 @@ def candidates_for(feature, catalogue, spectra, z, margin_kms=100., sigma_kms=30
             if key not in spectra:
                 continue
             f = spectra[key]['frequency']; lo, hi = min(f), max(f)
-            for r in w['rows']:
-                e = r['rest_GHz']/(1+z)
-                if r['species'] == species and lo <= e <= hi:
-                    everywhere.append((key, r))
+            mine = [r for r in w['rows'] if r['species'] == species and lo <= r['rest_GHz']/(1+z) <= hi]
+            everywhere += [(key, r) for r in merge_hyperfine(mine)]
         main = max(trans, key=lambda r: unit_intensity(r, 150., feature['sign']) or 0)
         offset = C*(main['expected_GHz']-feature['freq_GHz'])/main['expected_GHz']
         err = feature.get('centroid_error_kms')
         probabilities, _ = identification_probabilities([offset], sigma_kms, 0., max(margin_kms, 200.), err)
-        in_feature = {(r['rest_GHz'], r.get('qns')) for r in trans}
+        in_feature = {round(r['rest_GHz'], 4) for r in trans}
         by_T = {}
         for T in T_GRID:
             units = [unit_intensity(r, T, feature['sign']) for r in trans]
@@ -145,7 +198,7 @@ def candidates_for(feature, catalogue, spectra, z, margin_kms=100., sigma_kms=30
             scale = feature['flux_Jykms']/sum(units)
             rows_T, fmax, detected, missing, testable, supported = [], 1., 0, 0, 0, 0
             for key, r in everywhere:
-                if key == feature['spw'] and (((r['rest_GHz'], r.get('qns')) in in_feature)
+                if key == feature['spw'] and ((round(r['rest_GHz'], 4) in in_feature)
                                               or feature['freq_lo_GHz'] <= r['rest_GHz']/(1+z)*(1-offset/C) <= feature['freq_hi_GHz']):
                     continue          # part of this feature: not an independent check
                 u = unit_intensity(r, T, feature['sign'])
@@ -170,17 +223,21 @@ def candidates_for(feature, catalogue, spectra, z, margin_kms=100., sigma_kms=30
                 missing += status == 'missing'
                 testable += pred > 3*merr
                 supported += status == 'consistent' and meas > 3*merr
-                rows_T.append(dict(label=f"{r.get('qns', '')} {r['rest_GHz']:.4f}", window=key, rest_GHz=r['rest_GHz'], Eu_K=r.get('Eu_K'), overlap=overlap,
+                rows_T.append(dict(label=f"{r.get('qns', '')} {r['rest_GHz']:.4f}", qns=r.get('qns'), window=key, rest_GHz=r['rest_GHz'], Eu_K=r.get('Eu_K'),
+                                   centre_GHz=centre, overlap=overlap,
                                    predicted=pred, measured=meas, error=merr, status=status))
             by_T[T] = dict(fmax=fmax, companions=rows_T, detected=int(detected), missing=int(missing),
                            testable=int(testable), supported=int(supported))
         if by_T:
             # A temperature at which no companion is testable proves nothing: prefer temperatures
             # where the species explains at least half the feature AND its companions are seen.
-            bestT = max(by_T, key=lambda T: (by_T[T]['fmax'] >= .5, by_T[T]['supported'], round(by_T[T]['fmax'], 2), -T))
+            # When the temperature makes no difference, report one near 150 K, not the edge of the grid.
+            bestT = max(by_T, key=lambda T: (by_T[T]['fmax'] >= .5, by_T[T]['supported'], round(by_T[T]['fmax'], 2), -abs(np.log(T/T_REF))))
             best = by_T[bestT]
+            good = [T for T in by_T if by_T[T]['fmax'] >= max(.5, best['fmax']-.05)] or [bestT]
+            T_range = (min(good), max(good))
         else:
-            bestT, best = None, dict(fmax=None, companions=[], detected=0, missing=0, testable=0, supported=0)
+            bestT, best, T_range = None, dict(fmax=None, companions=[], detected=0, missing=0, testable=0, supported=0), None
         name = base_species(species)
         prior = prior_for(name, kind_flags(species), trans[0].get('seen_extragalactic'), trans[0].get('seen_in_space'))
         inside = any(feature['freq_lo_GHz'] <= r['expected_GHz'] <= feature['freq_hi_GHz'] for r in trans)
@@ -194,11 +251,13 @@ def candidates_for(feature, catalogue, spectra, z, margin_kms=100., sigma_kms=30
                                           expected_GHz=r['expected_GHz'], catalogue=r.get('catalogue'),
                                           inside=bool(feature['freq_lo_GHz'] <= r['expected_GHz'] <= feature['freq_hi_GHz'])) for r in trans],
                         main_rest_GHz=main['rest_GHz'], offset_kms=float(offset), id_probability=float(probabilities[0]),
-                        best_T=bestT, fmax=best['fmax'], fmax_by_T={str(int(T)): v['fmax'] for T, v in by_T.items()},
+                        best_T=bestT, T_range=T_range, fmax=best['fmax'], fmax_by_T={str(int(T)): v['fmax'] for T, v in by_T.items()},
                         companions_detected=best['detected'], companions_missing=best['missing'],
                         companions_testable=best['testable'], companions_supported=best['supported'],
                         companions=best['companions'], score=float(plaus*prior*position*support),
                         seen_extragalactic=trans[0].get('seen_extragalactic'), seen_in_space=trans[0].get('seen_in_space')))
+    for c in out:
+        c['verdict'], c['verdict_reason'] = verdict(c)
     # '[hf]' entries repeat a species with hyperfine splitting: keep the plain entry when both exist.
     names = {c['species'] for c in out}
     out = [c for c in out if not (c['species'].endswith('[hf]') and c['species'][:-4].strip() in names)]
@@ -257,15 +316,13 @@ def run(run, margin_kms=100., include='reliable', sigma_kms=30., top=3, species=
         out[f['id']] = dict(feature=f, candidates=cands, stage=stage, excluded_coincident=excluded)
         sp = spectra[f['spw']]
         pad = max(f['freq_hi_GHz']-f['freq_lo_GHz'], 0.05)
-        marks = [(t['expected_GHz'], f"{c['species']} {t['qns'] or ''}"[:28], figs.COLOURS[i % len(figs.COLOURS)])
+        lines = [(t['expected_GHz'], c['species'], f"{c['base']} {t['qns'] or ''}"[:26], figs.COLOURS[i % len(figs.COLOURS)])
                  for i, c in enumerate(cands[:6]) for t in c['transitions'][:4]]
-        figs.spectrum(run.plot(f'feature_{f["id"]}'), sp['frequency'], sp['spectrum'], sp['noise'], [dict(f, significant=f['significant'])],
-                      title=f"{f['id']}: candidates (top {min(6, len(cands))} of {len(cands)})", z=z, marks=marks,
+        figs.strategy(run.plot(f'feature_{f["id"]}'), sp['frequency'], sp['spectrum'], sp['noise'], [dict(f, significant=f['significant'])], lines,
+                      f"{f['id']}: lines of the leading candidates (top {min(6, len(cands))} of {len(cands)}), at the redshift", z=z,
                       xlim=(f['freq_lo_GHz']-pad, f['freq_hi_GHz']+pad))
         for i, c in enumerate(cands[:top]):
-            if c['companions']:
-                figs.companions(run.plot(f'companions_{f["id"]}_{i+1}'), c['companions'],
-                                f"{f['id']} as {c['species']}: companions at T = {c['best_T']:g} K (f_max {c['fmax']:.2f})")
+            figs.companions(run.plot(f'companions_{f["id"]}_{i+1}'), f, c, spectra)
     run.save('candidates', dict(z=z, margin_kms=margin_kms, include=include, species=species if groups else 'all', T_grid=T_GRID, features=out))
     run.log('identify', f'{len(out)} features tested', margin_kms=margin_kms, include=include, species=species if groups else 'all')
     return out
@@ -281,7 +338,7 @@ def summary(out, top=5):
         for c in d['candidates'][:top]:
             fm = 'n/a' if c['fmax'] is None else f"{c['fmax']:.2f}"
             lines.append(f"    {c['score']:.2f}  {c['species']:<28} dv {c['offset_kms']:+6.0f} km/s  f_max {fm} at T={c['best_T']}  "
-                         f"companions: {c['companions_supported']} seen of {c['companions_testable']} testable, {c['companions_missing']} missing  prior {c['prior']:.2f} {' '.join(c['flags'])}"
+                         f"{c.get('verdict', ''):<12} companions: {c['companions_supported']} seen of {c['companions_testable']} testable, {c['companions_missing']} missing  prior {c['prior']:.2f} {' '.join(c['flags'])}"
                          + ('  [reserve]' if c.get('stage') == 'reserve' else '') + ('  [line forest]' if c.get('line_forest') else '') + ('  [low specificity]' if c.get('low_specificity') else ''))
         if d.get('excluded_coincident'):
             ex = d['excluded_coincident']

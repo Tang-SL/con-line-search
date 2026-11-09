@@ -6,7 +6,7 @@ import numpy as np
 from ..core import C
 
 TEAL, ORANGE, PURPLE, GREY, RED, BLUE = '#167f83', '#c2410c', '#7356ad', '#6b7280', '#b91c1c', '#1d4ed8'
-COLOURS = [ORANGE, PURPLE, '#0f766e', '#b45309', BLUE, '#be185d', '#4d7c0f', GREY]
+COLOURS = ['#d95f02', '#7570b3', '#1b9e77', '#e7298a', '#1f78b4', '#66a61e', '#a6761d', '#e6ab02']    # distinct categorical colours
 plt.rcParams.update({'font.size': 9, 'axes.titlesize': 10, 'figure.dpi': 110, 'axes.spines.top': False, 'axes.spines.right': False})
 
 
@@ -135,36 +135,123 @@ def spectrum(path, freq, spec, noise, features=(), title='', unit='Jy/beam', z=N
     return _save(fig, path)
 
 
-def companions(path, rows, title, max_rows=15):
-    """Predicted vs measured integrated intensity for the transitions of one candidate species.
+GREEN = '#15803d'
+STATUS_STYLE = {'consistent': ('seen', GREEN), 'missing': ('MISSING', RED), 'detected': ('emission here, but predicted below noise', GREY),
+                'not detected': ('below the noise: no test', GREY)}
+VERDICT_COLOUR = {'rejected': RED, 'partial': '#b45309', 'supported': GREEN, 'inconclusive': '#b45309', 'untested': GREY}
 
-    Only transitions that test the candidate are drawn: predicted above 3σ, or missing, strongest
-    first (at most max_rows). If none is testable, the few strongest predictions are shown to make
-    that visible. The title says how many transitions were left out."""
-    keyed = sorted(rows, key=lambda r: -(r['predicted'] or 0))
-    show = [r for r in keyed if r['predicted'] > 3*r['error'] or r.get('status') == 'missing'][:max_rows]
-    note = 'testable transitions'
-    if not show:
-        show, note = keyed[:6], 'none testable: strongest predictions'
-    left = len(rows)-len(show)
-    fig, ax = plt.subplots(figsize=(max(5.5, 1.2+.45*len(show)), 4.2), layout='constrained')
-    x = np.arange(len(show))
-    pred = np.array([r['predicted'] for r in show]); meas = np.array([r['measured'] for r in show]); err = np.array([r['error'] for r in show])
-    ax.bar(x-.2, pred, .4, color=PURPLE, alpha=.7, label='LTE prediction (scaled to the feature)')
-    ax.errorbar(x+.2, meas, yerr=3*err, fmt='o', color=TEAL, label='measured ±3σ')
-    for i, r in enumerate(show):
-        if r.get('status') == 'missing':
-            ax.text(i, max(pred[i], meas[i]), ' missing', color=RED, fontsize=7, rotation=90, va='bottom')
-        elif str(r.get('status', '')).startswith('blended'):
-            ax.text(i, max(pred[i], meas[i]), ' blended', color=GREY, fontsize=7, rotation=90, va='bottom')
-    ax.set_xticks(x); ax.set_xticklabels([f"{r['window']}: {r['label']}"[:34] for r in show], rotation=50, ha='right', fontsize=7)
-    ax.set_ylabel('Integrated intensity (Jy/beam km/s)'); ax.axhline(0, color='#94a3b8', lw=.5)
-    ax.set_title(title+f"\n{note}" + (f'; {left} weaker transitions (below 3σ) not shown' if left > 0 else ''), fontsize=9)
-    ax.legend(fontsize=7)
+
+def _template(feature, spectra):
+    """The feature's own line shape: velocity axis (km/s, around its centroid) and a profile with unit
+    integral, so a companion predicted at P Jy/beam km/s is drawn as P x profile."""
+    sp = spectra[feature['spw']]; f = np.asarray(sp['frequency']); y = np.asarray(sp['spectrum'])
+    sel = (f >= feature['freq_lo_GHz']) & (f <= feature['freq_hi_GHz'])
+    if sel.sum() < 2:
+        return None
+    sign = 1 if feature['sign'] == 'Emission' else -1
+    v = C*(feature['freq_GHz']-f[sel])/feature['freq_GHz']
+    prof = np.clip(sign*y[sel], 0, None)
+    order = np.argsort(v); v, prof = v[order], prof[order]
+    area = float(np.sum(.5*(prof[1:]+prof[:-1])*np.diff(v)))
+    return (v, prof/area) if area > 0 else None
+
+
+def companions(path, feature, cand, spectra, max_panels=8):
+    """Does the candidate's other lines appear where, and as strongly as, LTE predicts?
+
+    Panel 1: the feature itself. Further panels: the observed spectrum around each of the
+    candidate's other lines in the observed windows (velocity relative to the line, at the
+    feature's velocity), with the line it predicts drawn on top. The predicted line has the
+    feature's own shape, scaled by LTE (temperature in the title) as if the candidate made the
+    whole feature (filled); dashed is the largest share of the feature it can make without
+    predicting a missing line (f_max)."""
+    sign = 1 if feature['sign'] == 'Emission' else -1
+    rank = {'missing': 0, 'consistent': 1, 'detected': 3, 'not detected': 4}
+    rows = sorted(cand['companions'], key=lambda r: (rank.get(r['status'], 2), -(r['predicted'] or 0)))
+    shown = rows[:max_panels-1]
+    n = 1+max(1, len(shown)); cols = min(4, n); nrows = int(np.ceil(n/cols))
+    fig, axes = plt.subplots(nrows, cols, figsize=(3.6*cols, 2.9*nrows+.9), squeeze=False, layout='constrained')
+    tmpl = _template(feature, spectra)
+    width = feature['width_kms']; span = max(1.5*width, 300.)
+    fmax = cand.get('fmax')
+    dashed = fmax is not None and .05 <= fmax < .98
+
+    def panel(ax, key, centre, title, pred=None, status=None, meas=None, err=None, here=False):
+        sp = spectra[key]; f = np.asarray(sp['frequency']); y = np.asarray(sp['spectrum']); nz = np.asarray(sp['noise'])
+        v = C*(centre-f)/centre
+        sel = np.abs(v) <= span
+        if sel.sum() < 2:
+            ax.text(.5, .5, 'outside the data', transform=ax.transAxes, ha='center', color=GREY); ax.set_title(title, fontsize=8); return
+        o = np.argsort(v[sel]); vv, yy, nn = v[sel][o], y[sel][o], nz[sel][o]
+        ax.fill_between(vv, -3*nn, 3*nn, color='#e2e8f0', step='mid', lw=0)
+        ax.axvspan(-width/2, width/2, color='#f1f5f9', zorder=0)
+        ax.step(vv, yy, where='mid', color='#0f172a', lw=.8)
+        ax.axhline(0, color='#94a3b8', lw=.5)
+        model = None
+        if pred is not None and tmpl is not None:
+            model = sign*pred*np.interp(vv, tmpl[0], tmpl[1], left=0, right=0)
+            ax.fill_between(vv, 0, model, color=PURPLE, alpha=.28, lw=0)
+            ax.plot(vv, model, color=PURPLE, lw=1)
+            if dashed:
+                ax.plot(vv, fmax*model, color=PURPLE, lw=1.1, ls='--')
+        if here:
+            for t in cand['transitions']:
+                if t.get('inside'):
+                    ax.axvline(C*(centre-t['expected_GHz']*(1-cand['offset_kms']/C))/centre, color=PURPLE, lw=1, ls=':')
+        ax.set_xlim(-span, span)
+        noise3 = 3*float(np.nanmedian(nn))
+        d_hi, d_lo = max(float(np.nanmax(yy)), noise3), min(float(np.nanmin(yy)), -noise3)
+        peak = float(np.nanmax(np.abs(model))) if model is not None else 0.
+        scale = max(abs(d_hi), abs(d_lo))
+        if peak > 3*scale:          # a huge predicted line would flatten the data: keep the data readable
+            top = 3*scale if sign > 0 else -d_lo*1.15
+            ax.set_ylim(d_lo*1.15 if sign > 0 else -3*scale, top*1.3 if sign > 0 else d_hi*1.3)
+            ax.text(.5, .80 if sign > 0 else .08, f"{'▲' if sign > 0 else '▼'} predicted peak {sign*peak:.3g} Jy/beam (off scale)",
+                    transform=ax.transAxes, ha='center', fontsize=7, color=PURPLE, fontweight='bold')
+        else:
+            lo, hi = ax.get_ylim(); ax.set_ylim(lo, hi+.25*(hi-lo))
+        ax.set_title(title, fontsize=8)
+        if status:
+            label, colour = STATUS_STYLE.get(status, ('blended: another feature', '#b45309'))
+            if status == 'missing' and meas is not None and err and meas > 3*err:
+                label = 'TOO WEAK'                 # present, but well below the prediction
+            if status.startswith('blended'):
+                label = status.replace('blended with', 'on feature').replace(feature['spw']+'-', '')
+            ax.text(.03, .95, label, transform=ax.transAxes, va='top', fontsize=8, color='white', fontweight='bold',
+                    bbox=dict(facecolor=colour, edgecolor='none', pad=2.2))
+            ax.text(.97, .95, f'Jy/beam km/s\npredicted {pred:.3g}\nobserved {meas:.2g} ± {err:.1g}', transform=ax.transAxes, va='top', ha='right', fontsize=6.5, color='#334155')
+        ax.tick_params(labelsize=7)
+
+    main = next((t for t in cand['transitions'] if t.get('inside')), cand['transitions'][0])
+    panel(axes[0, 0], feature['spw'], feature['freq_GHz'], f"the feature: {feature['id']}\n{(main.get('qns') or '')[:30]}", here=True)
+    for ax, r in zip(axes.flat[1:], shown):
+        panel(ax, r['window'], r['centre_GHz'], f"{r['window']}: {(r.get('qns') or '')[:26]}\n{r['rest_GHz']:.4f} GHz, E_u {r['Eu_K'] or 0:.0f} K",
+              r['predicted'], r['status'], r['measured'], r['error'])
+    if not shown:
+        ax = axes.flat[1]; ax.axis('off')
+        ax.text(.5, .5, f"No other line of {cand['species']}\nfalls in the observed windows:\nnothing to test it against.",
+                transform=ax.transAxes, ha='center', va='center', fontsize=9, color=GREY,
+                bbox=dict(facecolor='#f8fafc', edgecolor='#cbd5e1', boxstyle='round,pad=.8'))
+    for ax in list(axes.flat)[n:]:
+        ax.axis('off')
+    for ax in axes[-1]:
+        ax.set_xlabel('velocity relative to the line (km/s)', fontsize=7)
+    for ax in axes[:, 0]:
+        ax.set_ylabel('Jy/beam', fontsize=7)
+    v, why = cand.get('verdict') or 'untested', cand.get('verdict_reason') or ''
+    T = cand.get('best_T'); Tr = cand.get('T_range')
+    temp = '' if T is None else (f'LTE, T = {T:g} K' + (f' (same result for {Tr[0]:g}–{Tr[1]:g} K)' if Tr and Tr[0] != Tr[1] else ''))
+    left = len(rows)-len(shown)
+    fig.suptitle(f"Could {feature['id']} be {cand['species']}?  If so, its other lines should appear as drawn in purple ({temp})", fontsize=10)
+    fig.text(.01, -.01, f"{v.upper()}: {why}." + (f"  It can make at most {fmax:.0%} of the feature (f_max)." if fmax is not None and v not in ('untested', 'partial') else '')
+             + (f"  {left} more weaker lines not shown." if left > 0 else '')
+             + "\nGrey band: ±3σ noise; light column: integration window; purple: predicted line (feature's shape) if "
+               "the candidate made the whole feature" + (f"; dashed: the largest share it can make (f_max = {fmax:.2f})." if dashed else '.'),
+             fontsize=7.5, color=VERDICT_COLOUR.get(v, GREY), va='top')
     return _save(fig, path)
 
 
-def strategy(path, freq, spec, noise, features, lines, title, z=None):
+def strategy(path, freq, spec, noise, features, lines, title, z=None, xlim=None):
     """Aperture spectrum with the strong lines of the species to be tested.
 
     lines: list of (observed GHz, species, transition label, colour). One legend entry per
@@ -184,7 +271,7 @@ def strategy(path, freq, spec, noise, features, lines, title, z=None):
         seen.add(species)
         ax.text(f, ax.get_ylim()[1], label, rotation=90, fontsize=6, color=colour, ha='center', va='top',
                 bbox=dict(facecolor='white', edgecolor='none', alpha=.75, pad=.5))
-    ax.set_xlim(freq.min(), freq.max())
+    ax.set_xlim(*(xlim or (freq.min(), freq.max())))
     ax.set_xlabel('Observed frequency (GHz)'); ax.set_ylabel('Jy/beam'); ax.set_title(title, fontsize=9)
     if z is not None:
         sec = ax.secondary_xaxis('top', functions=(lambda x: x*(1+z), lambda x: x/(1+z)))

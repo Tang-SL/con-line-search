@@ -260,3 +260,25 @@ def test_image_window_stays_inside_the_data():
     assert cx+hx <= 383.5 and cy-hy >= -.5 and hx == hy
     cx, cy, hx, hy = figs._window((300, 250), 3, 384, 384, box=(96, 287, 96, 287))  # finite data only in the centre
     assert 95.5 <= cx-hx and cx+hx <= 287.5 and 95.5 <= cy-hy and cy+hy <= 287.5
+
+
+def test_hyperfine_components_count_as_one_line():
+    from conlines.agent.identify_step import merge_hyperfine
+    whole = dict(species='HCN, v2 = 1', rest_GHz=265.852709, qns='J= 3- 2, l=1e', S_mu2=60., Eu_K=1050.)
+    hf = [dict(species='HCN, v2 = 1', rest_GHz=265.8527+d, qns=f'J= 3- 2,F= {F}, l=1e', S_mu2=s, Eu_K=1050.)
+          for d, F, s in [(-1e-4, '4- 3', 27.), (0., '3- 2', 19.), (2e-4, '2- 1', 14.)]]
+    other = dict(species='HCN, v2 = 1', rest_GHz=267.199283, qns='J= 3- 2, l=1f', S_mu2=60., Eu_K=1050.)
+    merged = merge_hyperfine([whole]+hf+[other])
+    assert [m['qns'] for m in merged] == ['J= 3- 2, l=1e', 'J= 3- 2, l=1f']          # the whole-line entry wins
+    only_hf = merge_hyperfine(hf)
+    assert len(only_hf) == 1 and only_hf[0]['S_mu2'] == pytest.approx(60.) and 'hf components' in only_hf[0]['qns']
+
+
+def test_companion_verdicts():
+    from conlines.agent.identify_step import verdict
+    base = dict(companions=[{}], companions_missing=0, companions_supported=0, companions_testable=0, fmax=1.)
+    assert verdict(dict(base, companions_missing=1, fmax=0.))[0] == 'rejected'
+    assert verdict(dict(base, companions_missing=1, fmax=.47))[0] == 'partial'
+    assert verdict(dict(base, companions_supported=2, companions_testable=2))[0] == 'supported'
+    assert verdict(dict(base, companions_testable=1))[0] == 'inconclusive'
+    assert verdict(base)[0] == 'untested' and verdict(dict(base, companions=[]))[1].startswith('it has no other line')

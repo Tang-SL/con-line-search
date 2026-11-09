@@ -285,6 +285,7 @@ def section_strategy(run, out, plots):
 def section_identification(run, out, plots):
     cands = run.load('candidates', {})
     out.append(notes(run, 'identification'))
+    first = True
     for fid, d in (cands.get('features') or {}).items():
         f = d['feature']
         out.append(f"<h3>{e(fid)} · {e(f['sign'])} · {f['freq_GHz']:.5f} GHz · {f['width_kms']:.0f} km/s</h3>")
@@ -294,12 +295,20 @@ def section_identification(run, out, plots):
             out.append(f"<p class=small>Candidates from: {e(d['stage'])}."
                        + (f" Excluded by the species screen but with a line here: {len(ex)} ({e(', '.join(ex[:8]))}{', …' if len(ex) > 8 else ''})." if ex else '') + '</p>')
         out.append(img(plots, f'feature_{fid}.png'))
+        if first:
+            out.append('<p class=small><b>How to read the companion figures.</b> For each leading candidate, the first panel is the '
+                       'feature; the others show the observed spectrum where the candidate\'s other lines must appear if it made the '
+                       'feature, with the predicted line in purple (the feature\'s own shape, scaled by LTE). A large purple line over flat '
+                       'data means the candidate is <i>rejected</i>; one that matches the data <i>supports</i> it; one that lands on another '
+                       'feature is <i>inconclusive</i>; <i>partial</i> means it can only be part of the feature (a blend partner).</p>')
+            first = False
         out.append(table(d['candidates'][:10], [
             ('Score', lambda c: num(c['score'], '{:.2f}'), True), ('Species', lambda c: e(c['species'])+'<br><span class=small>'+e(', '.join(c['flags']+(['reserve'] if c.get('stage') == 'reserve' else [])+(['line forest'] if c.get('line_forest') else [])+(['low specificity'] if c.get('low_specificity') else [])))+'</span>', False),
             ('Transitions in feature', lambda c: '<br>'.join(f"{e(t['qns'])} {t['rest_GHz']:.5f} (E<sub>u</sub> {num(t['Eu_K'], '{:.0f}')} K)" for t in c['transitions'][:4]), False),
             ('Δv (km/s)', lambda c: num(c['offset_kms'], '{:+.0f}'), True), ('f_max', lambda c: num(c['fmax'], '{:.2f}'), True),
             ('T (K)', lambda c: num(c['best_T'], '{:.0f}'), True),
-            ('Companions', lambda c: f"{c.get('companions_supported', 0)} seen / {c.get('companions_testable', 0)} testable" + (f", <span class=missing>{c['companions_missing']} missing</span>" if c['companions_missing'] else ''), False),
+            ('Other lines (companion test)', lambda c: (f"<b>{e(c['verdict'])}</b><br>" if c.get('verdict') else '')
+             + f"{c.get('companions_supported', 0)} seen / {c.get('companions_testable', 0)} testable" + (f", <span class=missing>{c['companions_missing']} missing</span>" if c['companions_missing'] else ''), False),
             ('Prior', lambda c: num(c['prior'], '{:.2f}'), True)]))
         for i in range(1, 4):
             out.append(img(plots, f'companions_{fid}_{i}.png'))
