@@ -1,0 +1,16 @@
+#!/bin/bash
+# CON Line Agent.app: starts the line-identification agent, i.e. Claude Code in the
+# con-line-search folder, where the line-id-agent skill and scripts/agent live.
+#
+# macOS privacy protection usually stops a home-made app from reading ~/Documents, so
+# the app only hands over to Terminal (which has folder access) via "Start agent.command".
+# It looks for the project folder next to the app, then in the folder recorded by the
+# last start (for a copy in ~/Applications), then in the usual place.
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+here="$(cd -- "$(dirname -- "$0")/../../.." && pwd)"
+saved="$(cat "$HOME/Library/Application Support/con-line-search/project-folder" 2>/dev/null)"
+for folder in "$here" "$saved" "$HOME/Documents/CONs/con-line-search"; do
+  [[ -n "$folder" ]] && open -a Terminal "$folder/Start agent.command" 2>/dev/null && exit 0
+done
+osascript -e 'display alert "CON Line Agent" message "Cannot find the con-line-search folder. Open it and double-click Start agent.command."' >/dev/null 2>&1
+exit 1

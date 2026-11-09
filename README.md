@@ -103,9 +103,16 @@ No redistribution license for the project's original code has been selected yet.
 
 ## Line-identification agent (Claude Code)
 
+<img src="assets/logo/con-line-agent-icon-512.png" alt="CON Line Agent logo: an edge-on dusty galaxy nucleus above a spectrum with identified lines" width="128" align="right">
+
 The repository includes an agent that answers "which lines are in this object?" for a local
-folder of cubes or an ALMA project code. It runs in Claude Code on your Mac: open Claude Code in
-this folder and ask, for example:
+folder of cubes or an ALMA project code. It runs in Claude Code on your Mac.
+
+**To start it**, double-click **CON Line Agent.app** (copy it to `~/Applications` to start it
+from Launchpad or Spotlight), or `Start agent.command`. Either one opens Terminal and starts
+Claude Code in this folder.
+
+Then ask, for example:
 
 > What lines are in IRAS 17208-0014? The data are in /Users/tang/Documents/CONs/data/IRAS17208-0014.
 
