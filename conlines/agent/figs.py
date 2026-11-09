@@ -251,6 +251,52 @@ def companions(path, feature, cand, spectra, max_panels=8):
     return _save(fig, path)
 
 
+STATUS_COLOUR = {'secure': GREEN, 'tentative': '#b45309', 'unidentified': GREY}
+
+
+def overview(path, windows, solution, z, title):
+    """The whole observed spectrum with the adopted line solution: one row per spectral window
+    (by frequency), the features shaded, and every identified line marked at its own frequency,
+    coloured by status (solid: main line of a feature; dashed: blended line)."""
+    n = len(windows)
+    fig, axes = plt.subplots(n, 1, figsize=(13, 2.5*n+.8), squeeze=False, layout='constrained')
+    by_window = {}
+    for ent in solution.get('lines', []):
+        by_window.setdefault(ent['spw'], []).append(ent)
+    for ax, w in zip(axes[:, 0], windows):
+        f, y, nz = (np.asarray(w[k]) for k in ('frequency', 'spectrum', 'noise'))
+        ax.fill_between(f, -3*nz*1e3, 3*nz*1e3, color='#e2e8f0', step='mid', lw=0)
+        ax.step(f, y*1e3, where='mid', color='#0f172a', lw=.7)
+        ax.axhline(0, color='#94a3b8', lw=.5)
+        lo, hi = np.nanmin(y*1e3), np.nanmax(y*1e3)
+        ax.set_ylim(min(lo, -3*np.nanmedian(nz)*1e3)*1.15, hi+.55*(hi-lo))
+        top = ax.get_ylim()[1]
+        for ent in by_window.get(w['key'], []):
+            a, b = sorted([ent['observed_GHz']*(1-.5*ent['width_kms']/C), ent['observed_GHz']*(1+.5*ent['width_kms']/C)])
+            ax.axvspan(a, b, color=STATUS_COLOUR.get(ent['status'], GREY), alpha=.07, lw=0)
+            lines = ent['lines'] or [dict(species='unidentified', qns='', expected_GHz=ent['observed_GHz'], role='main', status='unidentified')]
+            for r in lines:
+                x = r.get('expected_GHz') or ent['observed_GHz']
+                colour = STATUS_COLOUR.get(r.get('status', ent['status']), GREY)
+                ax.axvline(x, color=colour, lw=1.1, ls='-' if r.get('role') == 'main' else '--')
+                label = r['species'].split(',')[0]+(' '+r['qns'] if r.get('qns') else '')
+                ax.text(x, top, ' '+label[:32], rotation=90, fontsize=7, color=colour, ha='center', va='top',
+                        bbox=dict(facecolor='white', edgecolor='none', alpha=.8, pad=.4))
+        ax.set_xlim(f.min(), f.max())
+        ax.set_ylabel('mJy/beam', fontsize=8)
+        ax.text(.005, .04, w['key'], transform=ax.transAxes, fontsize=8, color='#334155', fontweight='bold')
+        sec = ax.secondary_xaxis('top', functions=(lambda x: x*(1+z), lambda x: x/(1+z)))
+        sec.tick_params(labelsize=7)
+        ax.tick_params(labelsize=7)
+    axes[0, 0].set_title(title+f'   (top axis: rest frequency at z = {z:.5f})', fontsize=10)
+    axes[-1, 0].set_xlabel('Observed frequency (GHz)')
+    from matplotlib.lines import Line2D
+    handles = [Line2D([], [], color=STATUS_COLOUR[k], lw=1.5, label=k) for k in ('secure', 'tentative', 'unidentified')]
+    handles += [Line2D([], [], color=GREY, lw=1.1, ls='-', label='main line'), Line2D([], [], color=GREY, lw=1.1, ls='--', label='blended line')]
+    fig.legend(handles=handles, loc='outside lower center', ncol=5, fontsize=8, frameon=False)
+    return _save(fig, path)
+
+
 def strategy(path, freq, spec, noise, features, lines, title, z=None, xlim=None):
     """Aperture spectrum with the strong lines of the species to be tested.
 

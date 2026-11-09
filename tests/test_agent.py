@@ -151,16 +151,25 @@ def test_agent_pipeline_end_to_end(tmp_path, monkeypatch, capsys):
     sol = run.load('solution')
     assert not sol['problems']
     assert [l['status'] for e in sol['lines'] for l in e['lines']] == ['secure', 'tentative', 'secure', 'secure']
+    vib_e = sol['lines'][0]['lines'][1]
+    assert vib_e['tied_to']['feature'] == hcop and 'HCN, v2 = 1 l=1f' in vib_e['tied_to']['line'] and vib_e['snr'] is None
+    assert sol['lines'][0]['lines'][0]['snr'] > 10 and vib_e['expected_GHz'] != sol['lines'][0]['lines'][0]['expected_GHz']
+    assert (run.path/'plots'/'overview.png').exists()
     csv = (run.path/'products'/'line_solution.csv').read_text().splitlines()
     assert len(csv) == 5 and 'tentative' in csv[2]
     main(['maps', '--run', r])
     maps = run.load('maps')
     assert any(p.endswith('mom0.fits') for p in maps['products']) and any('blendfit' in p for p in maps['products'])
     (run.path/'notes'/'summary.md').write_text('**Synthetic** test run.')
+    (run.path/'notes'/'checks.md').write_text('Profile test (`check_profile.png`).')
+    shutil.copy(run.path/'plots'/'overview.png', run.path/'plots'/'check_profile.png')
     main(['report', '--run', r, '--title', 'Synthetic CON'])
     html = (run.path/'weblog'/'index.html').read_text()
     assert __import__('re').search(r'<(b|strong)>Synthetic</(b|strong)>', html) and 'HCN, v2 = 1' in html and 'tentative' in html
     assert 'Identification strategy' in html and 'because this is a CON' in html and 'line forest' in html
+    assert 'Hypotheses tested' in html and 'not free: =' in html and 'Additional checks' in html and 'check_profile.png' in html
+    assert 'overview.png' in html and 'not measured: set equal to' in html
+    assert html.index('Additional checks</h2>') > html.index('Maps</h2>')
     for src in __import__('re').findall(r'src="(plots/[^"]+)"', html):
         assert (run.path/'weblog'/src).exists(), src
     main(['status', '--run', r])

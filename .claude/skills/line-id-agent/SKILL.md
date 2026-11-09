@@ -180,7 +180,10 @@ testing, and explain why to the reviewers.
 
 **10. Blends and alternatives.**
 - Write each plausible solution as a hypothesis JSON (format in
-  `conlines/agent/blend_step.py`).
+  `conlines/agent/blend_step.py`). Give each hypothesis a short `name` and a one-sentence
+  `description` (what it tests and why), and give its lines readable `label`s (e.g.
+  "HCN-vib l=1f"). The weblog's "Hypotheses tested" table explains every hypothesis from these.
+  Use the same names in your notes, and don't invent shorthand that the table does not define.
 - Fit them: `scripts/agent blend --run R --hypothesis H.json`.
 - Compare them: `scripts/agent robust --run R --hypotheses H.json --n 100`.
 - Use ties for known ratios (HCN-vib l=1e = l=1f).
@@ -196,7 +199,13 @@ testing, and explain why to the reviewers.
   - lines that are "needed but not separable";
   - win fractions and flux spreads.
 - Rank the solutions as in playbook §5.
-- Write `notes/blends.md`.
+- Write `notes/blends.md`: the hypotheses, the ranking, and the fluxes adopted, with their
+  systematic range. Keep it to the standard blend fits. Detailed follow-up tests go into
+  step 13.
+- If you write your own fitting code: give every amplitude, width and sign a physical bound. A
+  Gaussian that is subtracted (absorption) must have amplitude ≥ 0; unbounded, it turns into
+  extra emission. Also stop large components from cancelling each other. Check that models
+  meant to differ do not converge to the same parameters.
 
 **11. Solution.** Write `solution.json` and run `scripts/agent solve --run R --solution
 solution.json` (format in `conlines/agent/solution_step.py`). Status rules:
@@ -220,12 +229,23 @@ and the `alternatives`, each with why it was not adopted. Write `notes/solution.
 - Watch for warnings about velocity fields beyond the search window.
 - Write `notes/maps.md`.
 
-**13. Report.**
+**13. Additional checks (optional, after the identification).**
+Follow-up tests that probe a result more deeply go into `notes/checks.md`, not into the blend
+or identification notes. Examples: comparing a line's profile with a reference line,
+fitting alternative profile models, channel-map centroids. Name their plots
+`plots/check_<name>.png`, or mention the file name in the note. The weblog shows them in an
+"Additional checks" section near the end, so the main sections stay readable. In
+`blends.md` or `solution.md`, refer to a check in one sentence, e.g. "the model-independent
+profile comparison (Additional checks) supports this".
+
+**14. Report.**
 - Write `notes/summary.md`: 5–10 sentences covering what lines are present, how sure you are,
   what this says about the source, and the main caveats and next steps.
 - Write `notes/provenance.md` if you changed or overrode anything.
 - Run `scripts/agent report --run R` and open `R/weblog/index.html`. Check that it renders
-  and every plot appears.
+  and every plot appears. The summary shows the adopted solution with the whole spectrum
+  (`plots/overview.png`, made by `solve`); check that every identified line is marked where it
+  belongs.
 
 **Final answer to the user:**
 - the line list with statuses;
@@ -283,7 +303,7 @@ the per-band weblogs (`scripts/agent report`) remain available for a single band
 ## Notes (what the weblog shows)
 
 `notes/summary.md`, `data.md`, `context.md`, `detection.md`, `significance.md`, `strategy.md`,
-`identification.md`, `identification_<FEATURE>.md`, `blends.md`, `solution.md`, `maps.md`,
+`identification.md`, `checks.md`, `identification_<FEATURE>.md`, `blends.md`, `solution.md`, `maps.md`,
 `provenance.md`. Markdown. Write for a colleague: state what you checked, what you concluded,
 and what would change your mind. Cite papers as (Author Year, arXiv:ID).
 

@@ -13,7 +13,7 @@ import shutil
 
 SECTIONS = [('summary', 'Summary'), ('data', 'Data'), ('context', 'Source context & literature'), ('detection', 'Line search'),
             ('significance', 'Significance'), ('strategy', 'Identification strategy'), ('identification', 'Identification'),
-            ('blends', 'Blends & robustness'), ('solution', 'Line solution & properties'), ('maps', 'Maps'), ('provenance', 'Provenance')]
+            ('blends', 'Blends & robustness'), ('solution', 'Line solution & properties'), ('maps', 'Maps'), ('checks', 'Additional checks'), ('provenance', 'Provenance')]
 
 CSS = """
 :root{--ink:#173047;--muted:#5b6b7a;--line:#dbe3ea;--bg:#f7f9fc;--card:#fff;--accent:#138c87;--good:#166534;--warn:#92400e;--bad:#991b1b}
@@ -161,13 +161,30 @@ def section_summary(run, out):
             rows.append(dict(ent, **{'line': r, 'status': r.get('status', ent['status'])}))
     out.append(notes(run, 'summary'))
     if rows:
+        def flux(r):
+            ln = r['line']
+            if ln.get('tied_to'):
+                t = ln['tied_to']
+                return (num(ln.get('flux_Jybkms'))+f"<br><span class=small>not measured: set equal to {e(t['line'])}"
+                        + (f" × {t['ratio']:g}" if t['ratio'] != 1 else '')+' by the fit\'s tie</span>')
+            return num(ln.get('flux_Jybkms'))+(' ± '+num(ln.get('flux_error_Jybkms'), '{:.2g}') if ln.get('flux_error_Jybkms') is not None else '')
+        first = set()
+        def feature_snr(r):
+            if r['feature'] in first:
+                return ''
+            first.add(r['feature']); return num(r['snr'], '{:.1f}')
         out.append('<h3>Adopted line solution</h3>'+table(rows, [
             ('Feature', lambda r: e(r['feature']), False), ('Status', lambda r: tag(r['status']), False),
             ('Line', lambda r: e(r['line']['species'])+(' <span class=small>(blended)</span>' if r['line'].get('role') == 'blended' else ''), False),
             ('Transition', lambda r: e(r['line'].get('qns')), False), ('Rest (GHz)', lambda r: num(r['line'].get('rest_GHz'), '{:.5f}'), True),
-            ('Observed (GHz)', lambda r: num(r['observed_GHz'], '{:.5f}'), True),
-            ('Flux (Jy/beam km/s)', lambda r: num(r['line'].get('flux_Jybkms'))+(' ± '+num(r['line'].get('flux_error_Jybkms'), '{:.2g}') if r['line'].get('flux_error_Jybkms') is not None else ''), True),
-            ('S/N', lambda r: num(r['snr'], '{:.1f}'), True), ('Reliability', lambda r: num(r['reliability'], '{:.2f}'), True)]))
+            ('Observed (GHz)', lambda r: num(r['line'].get('expected_GHz') or r['observed_GHz'], '{:.5f}'), True),
+            ('Flux (Jy/beam km/s)', flux, True),
+            ('Line S/N', lambda r: num(r['line'].get('snr'), '{:.0f}') if r['line'].get('snr') is not None else ('tied' if r['line'].get('tied_to') else ''), True),
+            ('Feature S/N', feature_snr, True), ('Reliability', lambda r: num(r['reliability'], '{:.2f}'), True)]))
+        out.append('<p class=small><b>Observed</b>: where the line falls at the adopted redshift. <b>Line S/N</b>: the line\'s flux over its '
+                   'statistical error (from the blend fit when the feature holds several lines; systematic errors are discussed under Blends). '
+                   '<b>Feature S/N</b>: integrated S/N of the whole detected feature, shown once per feature.</p>')
+        out.append(img(run.path/'plots', 'overview.png'))
     target = state.get('target') or ''
     out.append(f"<p class=small>Target: {e(target)} · z = {num(state.get('z'), '{:.6f}')} · run folder {e(run.path)}</p>")
 
@@ -314,13 +331,70 @@ def section_identification(run, out, plots):
             out.append(img(plots, f'companions_{fid}_{i}.png'))
 
 
+SHAPES = {'gauss': 'one Gaussian', 'gauss2': 'two Gaussians', 'template': 'a template line profile'}
+
+
+def _window(b):
+    """Line-free channels on each side of the features in this fit (None if not recorded)."""
+    m = {r.get('margin_channels') for r in b.get('regions', []) if r.get('margin_channels') is not None}
+    if m:
+        return max(m)
+    return (b.get('hypothesis') or {}).get('margin_channels')
+
+
+def describe_hypothesis(b, named=None):
+    """What a blend hypothesis assumes, in words, from its definition.
+
+    named: {(feature, rest GHz rounded to 4 decimals): label} from the solution, so lines carry the same
+    names as in the solution table; otherwise species and rest frequency."""
+    h = b.get('hypothesis') or {}
+    lines = h.get('lines') or []
+    named = named or {}
+    def name(i):
+        ln = lines[i]
+        return ln.get('label') or named.get((ln['feature'], round(float(ln['rest_GHz']), 4))) \
+            or f"{ln['species']} at {float(ln['rest_GHz']):.3f} GHz"
+    parts = []
+    for i, ln in enumerate(lines):
+        t = name(i)
+        if ln.get('tie') is not None:
+            r = ln.get('ratio', 1.)
+            t += f" (not free: = {name(ln['tie'])}" + (f" × {r:g}" if r != 1 else '') + ')'
+        parts.append(t)
+    shape = SHAPES.get(h.get('shape'), h.get('shape') or '')
+    text = f"Lines fitted: {' + '.join(parts)}. All lines share one profile shape: {shape}."
+    w = _window(b)
+    if w is not None:
+        text += f" Fit window: the features plus {w} channels on each side."
+    if h.get('description'):
+        text += ' '+h['description']
+    return text
+
+
 def section_blends(run, out, plots):
     out.append(notes(run, 'blends'))
-    out.append(img(plots, 'hco_hcn_template.png'))    # optional diagnostic
-    out.append(img(plots, 'f041_shape_tests.png'))
-    for p in sorted(run.path.glob('blend_*.json')):
-        b = json.loads(p.read_text())
-        out.append(f"<h3>{e(b['name'])}</h3><p>Shared shape: {e(b['shape_text'])} · reduced χ² {b['reduced_chi2']:.2f} · BIC {b['bic']:.1f}"
+    fits = [json.loads(p.read_text()) | {'_stem': p.stem} for p in sorted(run.path.glob('blend_*.json'))]
+    sol = run.load('solution', {}) if run.has('solution') else {}
+    named = {(ent['feature'], round(r['rest_GHz'], 4)): f"{r['species']} {r.get('qns') or ''}".strip()
+             for ent in sol.get('lines', []) for r in ent.get('lines', [])}
+    if fits:
+        used = {ent.get('blend_fit') for ent in sol.get('lines', [])}
+        best = {}
+        for b in fits:
+            best[_window(b)] = min(best.get(_window(b), float('inf')), b['bic'])
+        fits.sort(key=lambda b: (str(_window(b)), b['bic']))
+        out.append('<h3>Hypotheses tested</h3><p class=small>Each hypothesis is one joint fit of the features with a fixed list of '
+                   'lines. ΔBIC is relative to the best fit with the same fit window (BIC values from different windows are not '
+                   'comparable); a lower BIC is better, and differences above ~10 are decisive.</p>')
+        out.append(table(fits, [
+            ('Hypothesis', lambda b: e(b['name'])+(' <span class="tag secure">adopted</span>' if b['name'] in used else ''), False),
+            ('What it assumes', lambda b: e(describe_hypothesis(b, named)), False),
+            ('Reduced χ²', lambda b: num(b['reduced_chi2'], '{:.2f}'), True),
+            ('BIC', lambda b: num(b['bic'], '{:.1f}'), True),
+            ('ΔBIC', lambda b: num(b['bic']-best[_window(b)], '{:.0f}'), True)]))
+    for b in fits:
+        p = run.path/(b['_stem']+'.json')
+        out.append(f"<h3>{e(b['name'])}</h3><p class=small>{e(describe_hypothesis(b, named))}</p><p>Shared shape: {e(b['shape_text'])} · reduced χ² {b['reduced_chi2']:.2f} · BIC {b['bic']:.1f}"
                    + (f" · <span class=missing>shape at the edge of its range: {e(b['at_bounds'])}</span>" if b['at_bounds'] else '')+'</p>')
         out.append(img(plots, p.stem+'.png'))
         out.append(table(b['components'], [
@@ -336,6 +410,20 @@ def section_blends(run, out, plots):
         out.append(table(r['lines'], [('Hypothesis', lambda q: e(q['hypothesis']), False), ('Line', lambda q: e(q['line']), False),
                                       ('Flux', lambda q: num(q['flux']), True), ('Median (noise)', lambda q: num(q['median']), True),
                                       ('16–84%', lambda q: num(q['p16'])+' – '+num(q['p84']), True), ('Same sign', lambda q: num(q['fraction_positive'], '{:.0%}'), True)]))
+
+
+def section_checks(run, out, plots):
+    """Detailed follow-up tests made after the identification (notes/checks.md), with their plots:
+    plots/check_*.png and any plot the note names (e.g. `profile_test.png`)."""
+    text = (run.path/'notes'/'checks.md').read_text() if (run.path/'notes'/'checks.md').exists() else ''
+    names = [m for m in re.findall(r'([\w.+-]+\.png)', text) if (plots/m).exists()]
+    names += [p.name for p in sorted(plots.glob('check_*.png')) if p.name not in names]
+    if not text and not names:
+        out.append('<p class=small>No additional checks in this run.</p>')
+        return
+    out.append(notes(run, 'checks'))
+    for n in dict.fromkeys(names):
+        out.append(img(plots, n))
 
 
 def section_solution(run, out, plots):
@@ -389,7 +477,7 @@ def _sections(run, plots, prefix=''):
                  detection=lambda o: section_detection(run, o, plots), significance=lambda o: section_significance(run, o, plots),
                  strategy=lambda o: section_strategy(run, o, plots), identification=lambda o: section_identification(run, o, plots), blends=lambda o: section_blends(run, o, plots),
                  solution=lambda o: section_solution(run, o, plots), maps=lambda o: section_maps(run, o, plots),
-                 provenance=lambda o: section_provenance(run, o, plots))
+                 checks=lambda o: section_checks(run, o, plots), provenance=lambda o: section_provenance(run, o, plots))
     body = []
     for key, label in SECTIONS:
         part = []
@@ -434,7 +522,7 @@ def build(run, title=None):
 
 TOP = [('summary', 'Summary'), ('data', 'Data'), ('context', 'Source context & literature')]
 BAND = [('detection', 'Line search'), ('significance', 'Significance'), ('strategy', 'Identification strategy'), ('identification', 'Identification'),
-        ('blends', 'Blends & robustness'), ('solution', 'Line solution & properties'), ('maps', 'Maps')]
+        ('blends', 'Blends & robustness'), ('solution', 'Line solution & properties'), ('maps', 'Maps'), ('checks', 'Additional checks')]
 
 
 def build_combined(parts, out_dir, title, notes_dir=None):
@@ -466,7 +554,7 @@ def build_combined(parts, out_dir, title, notes_dir=None):
         return rel(''.join(part), sid)
     fns = dict(summary=lambda r, o, p: section_summary(r, o), data=section_data, context=section_context, detection=section_detection,
                significance=section_significance, strategy=section_strategy, identification=section_identification, blends=section_blends,
-               solution=section_solution, maps=section_maps, provenance=section_provenance)
+               solution=section_solution, maps=section_maps, checks=section_checks, provenance=section_provenance)
     nav, body = [], []
     def note_html(key):
         m = merged(key)

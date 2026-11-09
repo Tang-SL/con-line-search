@@ -11,7 +11,8 @@ and any ties:
                {"feature": "spw25-F003", "species": "HCO+, v = 0", "rest_GHz": 267.5576}]}
 
 ("tie": index of the line, 0-based, whose strength this one follows, times "ratio").
-Optional keys: "margin_channels" (line-free channels added on each side of every feature so
+Optional keys: "description" (one sentence for the weblog: what this hypothesis tests),
+"label" on a line (its name in the weblog, e.g. "HCN-vib l=1f"), "margin_channels" (line-free channels added on each side of every feature so
 that the baseline is constrained; default: a third of the feature's width, at least 10),
 "baseline" (true/false), "vmax" (km/s search range of the shape), "template" (shape="template").
 Robustness: every hypothesis is refitted to the observed spectrum plus many independent noise
@@ -62,7 +63,7 @@ def build(run, hyp, z=None, spec=None, margin=None):
         m = hyp.get('margin_channels', margin)
         m = int(m) if m is not None else max(10, (f['hi']-f['lo']+1)//3)
         lo, hi = max(0, f['lo']-m), min(n-1, f['hi']+m)
-        regions.append(dict(id=fid, spw=f['spw'], lo=lo, hi=hi, freq=np.asarray(sp['frequency'][lo:hi+1], float),
+        regions.append(dict(id=fid, spw=f['spw'], lo=lo, hi=hi, margin=m, freq=np.asarray(sp['frequency'][lo:hi+1], float),
                             spectrum=np.asarray(sp['spectrum'][lo:hi+1], float), noise=np.asarray(sp['noise'][lo:hi+1], float)))
     comps = []
     for i, line in enumerate(hyp['lines']):
@@ -85,7 +86,7 @@ def fit(run, hyp, save=True):
     result = blends.decompose(regions, comps, hyp.get('shape', 'gauss'), z, template, float(hyp.get('vmax', 300.)), hyp.get('baseline', True))
     names = {c['key']: f"{c['row']['species']} {c['row'].get('qns', '')}".strip()[:40] for c in comps}
     for r, reg in zip(result['regions'], regions):
-        r['feature'] = reg['id']
+        r['feature'] = reg['id']; r['margin_channels'] = reg['margin']
     result.update(name=hyp['name'], hypothesis=hyp, names=names, shape_text=blends.describe_shape(result))
     if save:
         slug = ''.join(ch if ch.isalnum() else '_' for ch in hyp['name'])[:60]
