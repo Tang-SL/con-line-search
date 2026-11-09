@@ -169,6 +169,8 @@ def test_agent_pipeline_end_to_end(tmp_path, monkeypatch, capsys):
     assert 'Identification strategy' in html and 'because this is a CON' in html and 'line forest' in html
     assert 'Hypotheses tested' in html and 'not free: =' in html and 'Additional checks' in html and 'check_profile.png' in html
     assert 'overview.png' in html and 'not measured: set equal to' in html
+    assert 'lowest BIC' in html and 'χ² by feature' in html and 'Wins in noise test' in html
+    assert all(r.get('chi2') is not None for r in run.load('blend_vib_tied')['regions'])
     assert html.index('Additional checks</h2>') > html.index('Maps</h2>')
     for src in __import__('re').findall(r'src="(plots/[^"]+)"', html):
         assert (run.path/'weblog'/src).exists(), src

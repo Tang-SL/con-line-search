@@ -85,8 +85,9 @@ def fit(run, hyp, save=True):
     regions, comps, template, z = build(run, hyp)
     result = blends.decompose(regions, comps, hyp.get('shape', 'gauss'), z, template, float(hyp.get('vmax', 300.)), hyp.get('baseline', True))
     names = {c['key']: f"{c['row']['species']} {c['row'].get('qns', '')}".strip()[:40] for c in comps}
-    for r, reg in zip(result['regions'], regions):
+    for r, reg, m in zip(result['regions'], regions, result['models']):
         r['feature'] = reg['id']; r['margin_channels'] = reg['margin']
+        r['chi2'] = float(np.sum((np.asarray(m['residual'])/np.asarray(reg['noise']))**2)); r['n_channels'] = len(reg['noise'])
     result.update(name=hyp['name'], hypothesis=hyp, names=names, shape_text=blends.describe_shape(result))
     if save:
         slug = ''.join(ch if ch.isalnum() else '_' for ch in hyp['name'])[:60]

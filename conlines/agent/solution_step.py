@@ -93,7 +93,7 @@ def run(run, solution):
                              aperture_flux_Jykms=ap, Lprime_K_kms_pc2=lp, L_Lsun=ls))
         out.append(dict(feature=fid, spw=f['spw'], sign=f['sign'], status=item['status'], observed_GHz=f['freq_GHz'],
                         width_kms=f['width_kms'], sigma_kms=f.get('sigma_kms'), snr=f['snr'], reliability=f['reliability'],
-                        blend_fit=item.get('blend_fit'), lines=rows, evidence=item.get('evidence', ''),
+                        blend_fit=item.get('blend_fit'), blend_fit_reason=item.get('blend_fit_reason', ''), lines=rows, evidence=item.get('evidence', ''),
                         alternatives=item.get('alternatives', [])))
     # name tie partners as the solution names them (the catalogue's quantum-number codes are cryptic)
     named = {(e['feature'], round(r['rest_GHz'], 4)): f"{r['species']} {r['qns']}".strip() for e in out for r in e['lines']}

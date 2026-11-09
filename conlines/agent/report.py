@@ -27,7 +27,7 @@ h1{margin:0 0 4px;font-size:26px}h2{margin:0 0 12px;font-size:20px;border-bottom
 th,td{border-bottom:1px solid var(--line);padding:5px 7px;text-align:left;vertical-align:top}th{background:#eef3f7;font-weight:600}
 td.num{text-align:right;font-variant-numeric:tabular-nums}img{max-width:100%;border:1px solid var(--line);border-radius:6px;margin:6px 0 12px;background:#fff}
 .tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;font-weight:600}
-.secure,.good{background:#dcfce7;color:var(--good)}.tentative,.warn{background:#fef3c7;color:var(--warn)}.unidentified,.bad{background:#fee2e2;color:var(--bad)}
+.secure,.good{background:#dcfce7;color:var(--good)}.tentative,.warn{background:#fef3c7;color:var(--warn)}.unidentified,.bad{background:#fee2e2;color:var(--bad)}.info{background:#e0f2fe;color:#075985}
 .notes{background:#f3f7fa;border-left:4px solid var(--accent);padding:8px 16px;border-radius:6px;margin:8px 0 14px}
 .notes p:first-child{margin-top:4px}details{margin:8px 0}summary{cursor:pointer;font-weight:600}code{background:#eef3f7;padding:1px 4px;border-radius:4px}
 .missing{color:var(--bad)}.small{font-size:12px;color:var(--muted)}
@@ -362,6 +362,11 @@ def describe_hypothesis(b, named=None):
             t += f" (not free: = {name(ln['tie'])}" + (f" × {r:g}" if r != 1 else '') + ')'
         parts.append(t)
     shape = SHAPES.get(h.get('shape'), h.get('shape') or '')
+    t = h.get('template')
+    if h.get('shape') == 'template' and isinstance(t, dict) and t.get('feature'):
+        ref = named.get((t['feature'], round(float(t.get('rest_GHz', 0)), 4))) or f"the line at {float(t.get('rest_GHz', 0)):.3f} GHz"
+        shape = (f"the observed profile of {t['feature']} ({ref}), placed at each line's frequency with its own amplitude. "
+                 f"{t['feature']} is then fitted partly with itself, so its χ² is low by construction")
     text = f"Lines fitted: {' + '.join(parts)}. All lines share one profile shape: {shape}."
     w = _window(b)
     if w is not None:
@@ -369,6 +374,23 @@ def describe_hypothesis(b, named=None):
     if h.get('description'):
         text += ' '+h['description']
     return text
+
+
+def _chi2_by_feature(run, b):
+    """{feature: (chi2, channels)} of one blend fit: stored by the fit, or recomputed from the cached spectra."""
+    out = {}
+    for r, m in zip(b.get('regions', []), b.get('models', [])):
+        if r.get('chi2') is not None:
+            out[r['feature']] = (r['chi2'], r.get('n_channels'))
+            continue
+        p = run.path/'cache'/f"spectrum_{r.get('spw') or r['feature'].rsplit('-', 1)[0]}.npz"
+        if not p.exists() or 'lo' not in r:
+            continue
+        import numpy as np
+        noise = np.load(p)['noise'][r['lo']:r['hi']+1]; res = np.asarray(m['residual'])
+        if len(noise) == len(res):
+            out[r['feature']] = (float(np.sum((res/noise)**2)), len(res))
+    return out
 
 
 def section_blends(run, out, plots):
@@ -383,15 +405,46 @@ def section_blends(run, out, plots):
         for b in fits:
             best[_window(b)] = min(best.get(_window(b), float('inf')), b['bic'])
         fits.sort(key=lambda b: (str(_window(b)), b['bic']))
+        wins = {}
+        for p in sorted(run.path.glob('robust_*.json')):
+            r = json.loads(p.read_text())
+            for name, w in r.get('win_fraction', {}).items():
+                wins.setdefault(name, []).append(f"{w:.0%} of {r['n']}")
+        chi = {b['name']: _chi2_by_feature(run, b) for b in fits}
+        def label(b):
+            out_ = e(b['name'])
+            if b['name'] in used:
+                out_ += ' <span class="tag secure">adopted</span>'
+            if b['bic'] == best[_window(b)]:
+                out_ += ' <span class="tag info">lowest BIC</span>'
+            return out_
         out.append('<h3>Hypotheses tested</h3><p class=small>Each hypothesis is one joint fit of the features with a fixed list of '
-                   'lines. ΔBIC is relative to the best fit with the same fit window (BIC values from different windows are not '
-                   'comparable); a lower BIC is better, and differences above ~10 are decisive.</p>')
+                   'lines. ΔBIC is relative to the lowest BIC with the same fit window (BIC values from different windows are not '
+                   'comparable, so each window has its own <i>lowest BIC</i>); a lower BIC is better, and differences above ~10 are '
+                   'decisive. <i>χ² by feature</i> shows where a fit gains or loses. <i>Wins in noise test</i>: how often the hypothesis '
+                   'had the lowest BIC when the noise was redrawn (only hypotheses included in a robustness run). The lowest BIC is '
+                   'not automatically adopted: a model can win for reasons that say nothing about the lines (e.g. a template fitted '
+                   'to itself); the reason is given below the table.</p>')
         out.append(table(fits, [
-            ('Hypothesis', lambda b: e(b['name'])+(' <span class="tag secure">adopted</span>' if b['name'] in used else ''), False),
+            ('Hypothesis', label, False),
             ('What it assumes', lambda b: e(describe_hypothesis(b, named)), False),
             ('Reduced χ²', lambda b: num(b['reduced_chi2'], '{:.2f}'), True),
             ('BIC', lambda b: num(b['bic'], '{:.1f}'), True),
-            ('ΔBIC', lambda b: num(b['bic']-best[_window(b)], '{:.0f}'), True)]))
+            ('ΔBIC', lambda b: num(b['bic']-best[_window(b)], '{:.0f}'), True),
+            ('χ² by feature (channels)', lambda b: '<br>'.join(f"{e(k)}: {v[0]:.0f} ({v[1]})" for k, v in chi[b['name']].items()), False),
+            ('Wins in noise test', lambda b: e(', '.join(wins.get(b['name'], [])) or '–'), True)]))
+        # the adopted fit must be explained when it is not the best by BIC
+        for ent in sol.get('lines', []):
+            name = ent.get('blend_fit')
+            b = next((x for x in fits if x['name'] == name), None)
+            if not b or ent['feature'] != next((x['feature'] for x in sol['lines'] if x.get('blend_fit') == name), None):
+                continue
+            lowest = min((x for x in fits if _window(x) == _window(b)), key=lambda x: x['bic'])
+            if lowest['name'] != name:
+                reason = ent.get('blend_fit_reason') or ''
+                out.append(f"<p class={'small' if reason else 'missing'}><b>Adopted: {e(name)}</b>, although "
+                           f"<b>{e(lowest['name'])}</b> has a BIC lower by {b['bic']-lowest['bic']:.0f} with the same fit window. "
+                           + (f"Reason: {e(reason)}" if reason else 'No reason was given: add "blend_fit_reason" to the solution.') + '</p>')
     for b in fits:
         p = run.path/(b['_stem']+'.json')
         out.append(f"<h3>{e(b['name'])}</h3><p class=small>{e(describe_hypothesis(b, named))}</p><p>Shared shape: {e(b['shape_text'])} · reduced χ² {b['reduced_chi2']:.2f} · BIC {b['bic']:.1f}"

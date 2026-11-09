@@ -221,7 +221,12 @@ solution.json` (format in `conlines/agent/solution_step.py`). Status rules:
 - Not significant or unreliable features are not lines. They stay in the significance table.
 
 For every entry, give the `evidence` (one paragraph: significance, companions, literature)
-and the `alternatives`, each with why it was not adopted. Write `notes/solution.md`.
+and the `alternatives`, each with why it was not adopted. If the adopted `blend_fit` is not
+the lowest-BIC fit with the same window (or not the one that wins the noise test), give
+`blend_fit_reason`: one or two sentences saying why. The weblog prints it under the
+hypotheses table, and flags its absence. Check the table's χ² by feature first: a fit that
+wins only in the feature it was built from (e.g. a template of that feature) gains nothing
+as evidence. Write `notes/solution.md`.
 
 **12. Maps.** `scripts/agent maps --run R`.
 - Look at the maps: is the emission compact or extended, and where is it? Do blended lines
