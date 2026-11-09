@@ -247,6 +247,9 @@ profile comparison (Additional checks) supports this".
 - Write `notes/summary.md`: 5–10 sentences covering what lines are present, how sure you are,
   what this says about the source, and the main caveats and next steps.
 - Write `notes/provenance.md` if you changed or overrode anything.
+- When the weblog is to be shared, write `notes/about.md`: one paragraph for collaborators on
+  what the report is, the strategy, the result and the products. It appears at the top of the
+  Summary. Local file paths are shortened to `~/` in the weblog.
 - Run `scripts/agent report --run R` and open `R/weblog/index.html`. Check that it renders
   and every plot appears. The summary shows the adopted solution with the whole spectrum
   (`plots/overview.png`, made by `solve`); check that every identified line is marked where it

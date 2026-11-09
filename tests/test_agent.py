@@ -162,6 +162,7 @@ def test_agent_pipeline_end_to_end(tmp_path, monkeypatch, capsys):
     assert any(p.endswith('mom0.fits') for p in maps['products']) and any('blendfit' in p for p in maps['products'])
     (run.path/'notes'/'summary.md').write_text('**Synthetic** test run.')
     (run.path/'notes'/'checks.md').write_text('Profile test (`check_profile.png`).')
+    (run.path/'notes'/'about.md').write_text('For collaborators: data in /Users/someone/Documents/x.')
     shutil.copy(run.path/'plots'/'overview.png', run.path/'plots'/'check_profile.png')
     main(['report', '--run', r, '--title', 'Synthetic CON'])
     html = (run.path/'weblog'/'index.html').read_text()
@@ -170,6 +171,7 @@ def test_agent_pipeline_end_to_end(tmp_path, monkeypatch, capsys):
     assert 'Hypotheses tested' in html and 'not free: =' in html and 'Additional checks' in html and 'check_profile.png' in html
     assert 'overview.png' in html and 'not measured: set equal to' in html
     assert 'lowest BIC' in html and 'χ² by feature' in html and 'Wins in noise test' in html
+    assert 'About this report' in html and '~/Documents/x' in html and '/Users/someone' not in html and str(run.path) not in html
     assert all(r.get('chi2') is not None for r in run.load('blend_vib_tied')['regions'])
     assert html.index('Additional checks</h2>') > html.index('Maps</h2>')
     for src in __import__('re').findall(r'src="(plots/[^"]+)"', html):

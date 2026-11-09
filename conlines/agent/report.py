@@ -159,6 +159,9 @@ def section_summary(run, out):
     for ent in sol['lines']:
         for r in ent['lines'] or [dict(role='', species='unidentified', qns='', rest_GHz=None, flux_Jybkms=None, flux_error_Jybkms=None)]:
             rows.append(dict(ent, **{'line': r, 'status': r.get('status', ent['status'])}))
+    about = notes(run, 'about')
+    if about:
+        out.append('<h3>About this report</h3>'+about)
     out.append(notes(run, 'summary'))
     if rows:
         def flux(r):
@@ -186,7 +189,7 @@ def section_summary(run, out):
                    '<b>Feature S/N</b>: integrated S/N of the whole detected feature, shown once per feature.</p>')
         out.append(img(run.path/'plots', 'overview.png'))
     target = state.get('target') or ''
-    out.append(f"<p class=small>Target: {e(target)} · z = {num(state.get('z'), '{:.6f}')} · run folder {e(run.path)}</p>")
+    out.append(f"<p class=small>Target: {e(target)} · z = {num(state.get('z'), '{:.6f}')} · run folder {e(run.path.name)}</p>")
 
 
 def section_data(run, out, plots):
@@ -539,7 +542,7 @@ def _sections(run, plots, prefix=''):
         except Exception as ex:      # one broken section must not lose the report
             part.append(f'<p class=missing>Could not build this section: {e(ex)}</p>')
         body.append(f'<section id="{prefix}{key}"><h2>{e(label)}</h2>{"".join(part)}</section>')
-    extra = sorted(p for p in (run.path/'notes').glob('*.md') if p.stem not in {k for k, _ in SECTIONS} and not p.stem.startswith('identification_'))
+    extra = sorted(p for p in (run.path/'notes').glob('*.md') if p.stem not in {k for k, _ in SECTIONS} | {'about'} and not p.stem.startswith('identification_'))
     if extra:
         body.append(f'<section id="{prefix}other"><h2>Other notes</h2>'+''.join(f'<h3>{e(p.stem)}</h3><div class=notes>{markdown(p.read_text())}</div>' for p in extra)+'</section>')
     return body
@@ -556,6 +559,16 @@ def _copy_outputs(run, dest):
         shutil.copytree(run.path/sub, target)
 
 
+def public_paths(text, run=None):
+    """Shorten local file paths before a weblog is shared: the run folder becomes its name, and home
+    folders (macOS /Users/<name>, Linux /home/<name>, and the /sessions/<id>/mnt mount of a linked
+    computer) become ~/."""
+    if run is not None:
+        text = text.replace(str(run.path.resolve()), run.path.name).replace(str(run.path), run.path.name)
+    text = re.sub(r'/sessions/[^/\s"<>&]+/mnt/', '~/', text)
+    return re.sub(r'/(?:Users|home)/[^/\s"<>&]+/', '~/', text)
+
+
 def build(run, title=None):
     out_dir = run.path/'weblog'
     _copy_outputs(run, out_dir)
@@ -568,7 +581,7 @@ def build(run, title=None):
     page = (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>{e(title)}</title><style>{CSS}</style></head><body><nav><b>{e(title)}</b>{nav}</nav><main>'
             f'<h1>{e(title)}</h1><div class=sub>Weblog generated {stamp}</div>{"".join(body)}</main></body></html>')
-    (out_dir/'index.html').write_text(page)
+    (out_dir/'index.html').write_text(public_paths(page, run))
     run.log('report', 'weblog written', path=str(out_dir/'index.html'))
     return out_dir/'index.html'
 
@@ -649,5 +662,5 @@ def build_combined(parts, out_dir, title, notes_dir=None):
     page = (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>{e(title)}</title><style>{css}</style></head><body><nav><b>{e(title)}</b>{"".join(nav)}</nav><main>'
             f'<h1>{e(title)}</h1><div class=sub>Weblog generated {stamp}</div>{"".join(body)}</main></body></html>')
-    (out_dir/'index.html').write_text(page)
+    (out_dir/'index.html').write_text(public_paths(page))
     return out_dir/'index.html'
